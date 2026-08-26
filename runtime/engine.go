@@ -108,6 +108,7 @@ func (e *engineClient) List(ctx context.Context) ([]Container, error) {
 			Mounts:  mounts,
 			Project: project,
 			Service: service,
+			Image:   s.Image,
 		})
 	}
 	return out, nil
@@ -126,13 +127,30 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 	}
 
 	var labels map[string]string
+	image := ""
+	var env []string
 	if info.Config != nil {
 		labels = info.Config.Labels
+		image = info.Config.Image
+		env = info.Config.Env
 	}
 
 	state := ""
+	health := ""
 	if info.State != nil {
 		state = info.State.Status
+		// State.Health is nil when the container has no HEALTHCHECK, so the
+		// pointer must be guarded before reading its status.
+		if info.State.Health != nil {
+			health = info.State.Health.Status
+		}
+	}
+
+	// HostConfig is present on inspect but absent from the list summary, so
+	// LogDriver only populates here. It stays empty when HostConfig is nil.
+	logDriver := ""
+	if info.HostConfig != nil {
+		logDriver = info.HostConfig.LogConfig.Type
 	}
 
 	mounts := make([]Mount, 0, len(info.Mounts))
@@ -142,13 +160,17 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 
 	project, service := e.identity(labels)
 	return Container{
-		ID:      info.ID,
-		Name:    strings.TrimPrefix(info.Name, "/"),
-		State:   state,
-		Labels:  labels,
-		Mounts:  mounts,
-		Project: project,
-		Service: service,
+		ID:        info.ID,
+		Name:      strings.TrimPrefix(info.Name, "/"),
+		State:     state,
+		Labels:    labels,
+		Mounts:    mounts,
+		Project:   project,
+		Service:   service,
+		Image:     image,
+		LogDriver: logDriver,
+		Env:       env,
+		Health:    health,
 	}, nil
 }
 
@@ -347,6 +369,33 @@ func (e *engineClient) Start(ctx context.Context, id string) error {
 
 	if err := cli.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
 		return fmt.Errorf("runtime/%s: start %s: %w", e.engine, id, err)
+	}
+	return nil
+}
+
+// Kill sends a signal to a running container, e.g. "SIGHUP" to prompt a
+// collector to reload its configuration.
+func (e *engineClient) Kill(ctx context.Context, id string, signal string) error {
+	cli, err := e.clientFor()
+	if err != nil {
+		return err
+	}
+
+	if err := cli.ContainerKill(ctx, id, signal); err != nil {
+		return fmt.Errorf("runtime/%s: kill %s: %w", e.engine, id, err)
+	}
+	return nil
+}
+
+// Restart restarts a container, using the runtime's default stop timeout.
+func (e *engineClient) Restart(ctx context.Context, id string) error {
+	cli, err := e.clientFor()
+	if err != nil {
+		return err
+	}
+
+	if err := cli.ContainerRestart(ctx, id, container.StopOptions{}); err != nil {
+		return fmt.Errorf("runtime/%s: restart %s: %w", e.engine, id, err)
 	}
 	return nil
 }

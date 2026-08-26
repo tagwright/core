@@ -48,6 +48,13 @@ type Runtime interface {
 	// Start starts a stopped container.
 	Start(ctx context.Context, id string) error
 
+	// Kill sends a signal to a running container, e.g. "SIGHUP" to prompt a
+	// collector to reload its configuration.
+	Kill(ctx context.Context, id string, signal string) error
+
+	// Restart restarts a container, using the runtime's default stop timeout.
+	Restart(ctx context.Context, id string) error
+
 	// Close releases the underlying client.
 	Close() error
 }
@@ -61,6 +68,25 @@ type Container struct {
 	Mounts  []Mount
 	Project string // com.docker.compose.project, empty if not a compose service
 	Service string // com.docker.compose.service, empty if not a compose service
+
+	// Image is the container's image reference. Populated on both List and
+	// Inspect.
+	Image string
+
+	// LogDriver is the effective logging driver, e.g. "json-file", "local",
+	// "journald". Inspect-only (the list summary carries no HostConfig), and
+	// empty when unknown.
+	LogDriver string
+
+	// Env holds the container's environment entries as KEY=VALUE strings.
+	// Inspect-only. Core surfaces the raw slice: callers that only need the
+	// names must split it themselves and must not log the values.
+	Env []string
+
+	// Health is the container health status when a HEALTHCHECK is defined,
+	// e.g. "healthy", "unhealthy", "starting". Empty when the container has no
+	// healthcheck. Inspect-only.
+	Health string
 }
 
 // MountType distinguishes the kinds of mount Ballast cares about.
