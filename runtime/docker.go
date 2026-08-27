@@ -33,6 +33,10 @@ func NewDocker(socket string) *DockerRuntime {
 // compile-time assertion that the adapter satisfies the interface.
 var _ Runtime = (*DockerRuntime)(nil)
 
+// compile-time assertion that the adapter also satisfies the optional
+// NetworkInspector capability, via engineClient.ListNetworks.
+var _ NetworkInspector = (*DockerRuntime)(nil)
+
 // dockerComposeIdentity resolves compose project/service names from
 // Docker's own com.docker.compose.* labels.
 func dockerComposeIdentity(labels map[string]string) (project, service string) {

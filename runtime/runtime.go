@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/netip"
 )
 
 // ErrNotImplemented is returned by adapter methods that are not wired up yet.
@@ -59,6 +60,39 @@ type Runtime interface {
 	Close() error
 }
 
+// NetworkInspector is an optional capability a Runtime implementation may
+// satisfy in addition to Runtime. It is kept as a separate interface,
+// rather than a new method on Runtime, so that adding it never breaks an
+// existing consumer's mock or alternate implementation of Runtime: a
+// consumer that wants network introspection type-asserts the value it got
+// back from a constructor (or from Runtime) to NetworkInspector, and a
+// consumer that does not care about networks is unaffected.
+//
+// DockerRuntime and PodmanRuntime both satisfy NetworkInspector.
+type NetworkInspector interface {
+	// ListNetworks returns every network the runtime knows about, with its
+	// subnet CIDRs and whether it is marked internal.
+	ListNetworks(ctx context.Context) ([]Network, error)
+}
+
+// Network is the normalized view of a container network across runtimes.
+type Network struct {
+	Name     string
+	ID       string
+	Driver   string
+	Internal bool
+	Subnets  []netip.Prefix
+	Labels   map[string]string
+}
+
+// ContainerNetwork is one network a container is attached to, along with
+// the IP addresses it holds on that network.
+type ContainerNetwork struct {
+	Name string
+	ID   string
+	IPs  []netip.Addr
+}
+
 // Container is the normalized view of a container across runtimes.
 type Container struct {
 	ID      string
@@ -87,6 +121,13 @@ type Container struct {
 	// e.g. "healthy", "unhealthy", "starting". Empty when the container has no
 	// healthcheck. Inspect-only.
 	Health string
+
+	// Networks lists the container's network attachments and the IP
+	// addresses it holds on each. Unlike Image/LogDriver/Env/Health, the
+	// list summary carries this data at no extra cost (it is already part
+	// of the same API response), so Networks is populated on both List and
+	// Inspect.
+	Networks []ContainerNetwork
 }
 
 // MountType distinguishes the kinds of mount Ballast cares about.

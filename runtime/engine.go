@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/netip"
+	"sort"
 	"strings"
 	"sync"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 )
@@ -99,16 +102,22 @@ func (e *engineClient) List(ctx context.Context) ([]Container, error) {
 			mounts = append(mounts, mapMountPoint(m))
 		}
 
+		var networks []ContainerNetwork
+		if s.NetworkSettings != nil {
+			networks = mapContainerNetworks(s.NetworkSettings.Networks)
+		}
+
 		project, service := e.identity(s.Labels)
 		out = append(out, Container{
-			ID:      s.ID,
-			Name:    name,
-			State:   s.State,
-			Labels:  s.Labels,
-			Mounts:  mounts,
-			Project: project,
-			Service: service,
-			Image:   s.Image,
+			ID:       s.ID,
+			Name:     name,
+			State:    s.State,
+			Labels:   s.Labels,
+			Mounts:   mounts,
+			Project:  project,
+			Service:  service,
+			Image:    s.Image,
+			Networks: networks,
 		})
 	}
 	return out, nil
@@ -158,6 +167,11 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 		mounts = append(mounts, mapMountPoint(m))
 	}
 
+	var networks []ContainerNetwork
+	if info.NetworkSettings != nil {
+		networks = mapContainerNetworks(info.NetworkSettings.Networks)
+	}
+
 	project, service := e.identity(labels)
 	return Container{
 		ID:        info.ID,
@@ -171,7 +185,96 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 		LogDriver: logDriver,
 		Env:       env,
 		Health:    health,
+		Networks:  networks,
 	}, nil
+}
+
+// mapContainerNetworks translates the Docker Engine API's per-network
+// endpoint settings (keyed by network name, shared verbatim between the
+// list summary's NetworkSettingsSummary and inspect's NetworkSettings) into
+// Ballast's normalized ContainerNetwork slice. IP address strings that fail
+// to parse (most commonly an empty string, when a container holds no
+// address on one address family) are skipped rather than failing the whole
+// mapping. The result is sorted by network name for a deterministic order,
+// since map iteration is not.
+func mapContainerNetworks(nets map[string]*network.EndpointSettings) []ContainerNetwork {
+	if len(nets) == 0 {
+		return nil
+	}
+
+	out := make([]ContainerNetwork, 0, len(nets))
+	for name, ep := range nets {
+		if ep == nil {
+			continue
+		}
+
+		cn := ContainerNetwork{Name: name, ID: ep.NetworkID}
+		if addr, err := netip.ParseAddr(ep.IPAddress); err == nil {
+			cn.IPs = append(cn.IPs, addr)
+		}
+		if addr, err := netip.ParseAddr(ep.GlobalIPv6Address); err == nil {
+			cn.IPs = append(cn.IPs, addr)
+		}
+		out = append(out, cn)
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// ListNetworks returns every network the runtime knows about, with its
+// subnet CIDRs and internal flag. It satisfies NetworkInspector for both
+// DockerRuntime and PodmanRuntime, which embed engineClient.
+func (e *engineClient) ListNetworks(ctx context.Context) ([]Network, error) {
+	cli, err := e.clientFor()
+	if err != nil {
+		return nil, err
+	}
+
+	summaries, err := cli.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("runtime/%s: list networks: %w", e.engine, err)
+	}
+
+	out := make([]Network, 0, len(summaries))
+	for _, n := range summaries {
+		out = append(out, mapNetworkSummary(n))
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// mapNetworkSummary translates a Docker Engine API network summary into
+// Ballast's normalized Network type. network.Summary is a type alias for
+// network.Inspect as of the docker/docker v28.5.2 SDK this package depends
+// on, so NetworkList already returns IPAM, Driver, Internal, and Labels in
+// full: no follow-up NetworkInspect call per network is needed to populate
+// them. Subnet strings that fail to parse as a netip.Prefix are skipped
+// defensively rather than failing the whole inventory, since a malformed or
+// unexpected IPAM config on one network should not hide every other
+// network's subnets from a caller doing egress classification.
+func mapNetworkSummary(n network.Summary) Network {
+	subnets := make([]netip.Prefix, 0, len(n.IPAM.Config))
+	for _, c := range n.IPAM.Config {
+		if c.Subnet == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(c.Subnet)
+		if err != nil {
+			continue
+		}
+		subnets = append(subnets, prefix)
+	}
+
+	return Network{
+		Name:     n.Name,
+		ID:       n.ID,
+		Driver:   n.Driver,
+		Internal: n.Internal,
+		Subnets:  subnets,
+		Labels:   n.Labels,
+	}
 }
 
 // mapMountPoint translates a Docker Engine API mount point into Ballast's

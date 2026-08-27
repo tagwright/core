@@ -59,6 +59,14 @@ func NewPodman(socket string) *PodmanRuntime {
 // compile-time assertion that the adapter satisfies the interface.
 var _ Runtime = (*PodmanRuntime)(nil)
 
+// compile-time assertion that the adapter also satisfies the optional
+// NetworkInspector capability. ListNetworks is implemented once on the
+// shared engineClient (engine.go) that both DockerRuntime and PodmanRuntime
+// embed: it is Docker-proven and, like the rest of the shared compat-API
+// machinery, Podman compile-verified rather than exercised against a live
+// Podman network yet.
+var _ NetworkInspector = (*PodmanRuntime)(nil)
+
 // defaultPodmanSocket returns the conventional Podman API socket path for
 // the process's own privilege level, matching the defaults podman-remote
 // itself documents: the rootless per-user socket when running unprivileged,
