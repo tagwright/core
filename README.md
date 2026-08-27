@@ -13,4 +13,41 @@ compose identity off a container's labels.
 This module is a leaf: its only non-stdlib dependency is the Docker SDK. It was
 extracted from ballast so a second consumer can share the same abstraction.
 
+## Optional capabilities
+
+The base `Runtime` interface is the stable contract every adapter satisfies:
+list, inspect, watch, exec, stop, start, kill, restart, and close. Capabilities
+added after v0.2.0 land as separate optional interfaces rather than new
+`Runtime` methods, so a new capability never breaks an existing consumer's mock
+or alternate `Runtime` implementation. A consumer type-asserts for the
+capability it wants:
+
+    if ni, ok := rt.(runtime.NetworkInspector); ok {
+        nets, err := ni.ListNetworks(ctx)
+        // ...
+    }
+
+- `NetworkInspector` (v0.3.0): `ListNetworks(ctx)` returns each network's subnet
+  CIDRs, driver, internal flag, and labels, for classifying a destination as
+  own-network, LAN, or internet. Both the Docker and Podman adapters satisfy it.
+
+## Normalized types
+
+- `Container`: id, name, state, labels, mounts, compose project and service,
+  image, log driver, env, health, and `Networks`.
+- `ContainerNetwork`: one network a container is attached to, and the IP
+  addresses it holds on that network.
+- `Network`: a network's name, id, driver, internal flag, subnet CIDRs, and
+  labels.
+- `Mount`: a normalized bind, tmpfs, or named-volume mount.
+
+## Versions
+
+- v0.3.0: network introspection. `NetworkInspector.ListNetworks`, `Network`,
+  `ContainerNetwork`, and `Container.Networks`, for egress classification.
+- v0.2.0: `Kill` and `Restart`, and `Container` gains image, log driver, env,
+  and health.
+- v0.1.0: initial extraction from ballast. The `Runtime` abstraction over Docker
+  and Podman with normalized `Container` and `Mount` types.
+
 Licensed under GPL-3.0-or-later. See LICENSE.
