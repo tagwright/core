@@ -67,6 +67,15 @@ var _ Runtime = (*PodmanRuntime)(nil)
 // Podman network yet.
 var _ NetworkInspector = (*PodmanRuntime)(nil)
 
+// compile-time assertion that the adapter also satisfies the optional
+// Provisioner capability. Like NetworkInspector, the create/remove methods
+// live once on the shared engineClient (provision.go) that both runtimes
+// embed, targeting the Docker-compatible network/volume/container/exec surface
+// Podman also serves. It is Docker-proven and, like the rest of the shared
+// compat-API machinery, Podman compile-verified rather than exercised against
+// a live Podman socket yet.
+var _ Provisioner = (*PodmanRuntime)(nil)
+
 // defaultPodmanSocket returns the conventional Podman API socket path for
 // the process's own privilege level, matching the defaults podman-remote
 // itself documents: the rootless per-user socket when running unprivileged,

@@ -37,6 +37,12 @@ var _ Runtime = (*DockerRuntime)(nil)
 // NetworkInspector capability, via engineClient.ListNetworks.
 var _ NetworkInspector = (*DockerRuntime)(nil)
 
+// compile-time assertion that the adapter also satisfies the optional
+// Provisioner capability, via the create/remove methods on engineClient
+// (provision.go). This is the surface ballast verify drives to stand up and
+// tear down a throwaway restore sandbox.
+var _ Provisioner = (*DockerRuntime)(nil)
+
 // dockerComposeIdentity resolves compose project/service names from
 // Docker's own com.docker.compose.* labels.
 func dockerComposeIdentity(labels map[string]string) (project, service string) {
