@@ -15,6 +15,20 @@ returns the full IPAM config, driver, internal flag, and labels in one call,
 with no per-network inspect. Live end-to-end exercise against a running Docker
 socket is not yet part of the test suite.
 
+Provisioning (`Provisioner` and the optional `ExecSpec.Stdin`) is Docker-proven
+end to end. `TestProvisionerDockerRoundTrip` runs against a live Docker socket:
+it pulls a tiny image, creates an isolated (internal) network and a fresh
+volume, creates and starts a container with that volume mounted on that
+network, asserts via `NetworkInspector` that the network really is internal,
+execs a probe, pipes a payload through `ExecSpec.Stdin` and reads it back, then
+tears every object down. All objects are prefixed `core-itest-` and labelled
+`com.tagwright.core.itest=1`, and each is removed by a deferred cleanup
+registered the moment it is created, so a mid-test failure still leaves nothing
+behind and nothing outside the test's own objects is ever touched. The test
+skips cleanly when no Docker socket is reachable, so `go test ./...` stays green
+on a host with no daemon. Run it with the socket mounted into the golang
+container (`-v /var/run/docker.sock:/var/run/docker.sock`).
+
 ## Podman
 
 Compile-verified only. Both adapters share one request-and-mapping core, and

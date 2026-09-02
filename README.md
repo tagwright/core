@@ -30,6 +30,15 @@ capability it wants:
 - `NetworkInspector` (v0.3.0): `ListNetworks(ctx)` returns each network's subnet
   CIDRs, driver, internal flag, and labels, for classifying a destination as
   own-network, LAN, or internet. Both the Docker and Podman adapters satisfy it.
+- `Provisioner` (v0.4.0): stand up and tear down throwaway objects to prove a
+  restore in a sandbox with no path to production. `PullImage`, `CreateNetwork`
+  (always internal, no external routing), `RemoveNetwork`, `CreateVolume`,
+  `RemoveVolume`, `CreateContainer` (volume mounts, on a network, no published
+  ports, created but started only on request), and `RemoveContainer` (with its
+  anonymous volumes). Every create spec carries a `Labels` map so a caller can
+  find and sweep orphans after a crash. The caller owns teardown; core does
+  not. Both the Docker and Podman adapters satisfy it. This is the surface
+  ballast's `ballast verify` command drives.
 
 ## Normalized types
 
@@ -43,6 +52,14 @@ capability it wants:
 
 ## Versions
 
+- v0.4.0: provisioning. The `Provisioner` optional capability
+  (`PullImage`, `CreateNetwork`, `RemoveNetwork`, `CreateVolume`,
+  `RemoveVolume`, `CreateContainer`, `RemoveContainer`) with its `NetworkSpec`,
+  `VolumeSpec`, `ContainerSpec`, and `VolumeMount` spec types, for standing up
+  a throwaway restore sandbox on an isolated network. Adds an optional
+  `ExecSpec.Stdin` field so `Exec` can pipe a dump into a restoring process
+  (nil keeps the prior behavior). Both changes are additive: the `Runtime`
+  interface is unchanged.
 - v0.3.0: network introspection. `NetworkInspector.ListNetworks`, `Network`,
   `ContainerNetwork`, and `Container.Networks`, for egress classification.
 - v0.2.0: `Kill` and `Restart`, and `Container` gains image, log driver, env,
