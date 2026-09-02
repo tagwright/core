@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 techgaud
 
 // Package runtime abstracts a container runtime (Docker or Podman) behind the
 // small set of operations Ballast needs: discover containers and their mounts,
