@@ -170,6 +170,15 @@ type Event struct {
 type ExecSpec struct {
 	Cmd  []string
 	User string // empty means the container's default user
+
+	// Stdin, when non-nil, is attached to the command's standard input and
+	// copied to completion, after which the write side is closed so the
+	// command sees EOF. It is nil for the common case (a quiesce or a
+	// dump-producing command that reads nothing on stdin); a stream-restore
+	// sets it to pipe a backup dump into the restoring process. When nil, Exec
+	// behaves exactly as it always has, so this field is backward compatible
+	// with every existing caller.
+	Stdin io.Reader
 }
 
 // ExecHandle is a running exec. The caller reads Stdout to completion, then

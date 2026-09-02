@@ -394,6 +394,12 @@ func (e *engineClient) Watch(ctx context.Context) (<-chan Event, <-chan error) {
 // matters because the caller pipes a live dump into restic --stdin rather
 // than buffering it. Standard error is captured separately and folded into
 // the error Wait returns on a non-zero exit.
+//
+// When spec.Stdin is non-nil (a stream-restore piping a dump into the
+// restoring process) it is attached to the command's standard input and
+// copied in a goroutine, then the write half is closed so the command sees
+// EOF. When spec.Stdin is nil this is a no-op and Exec behaves exactly as it
+// always has.
 func (e *engineClient) Exec(ctx context.Context, id string, spec ExecSpec) (*ExecHandle, error) {
 	cli, err := e.clientFor()
 	if err != nil {
@@ -403,6 +409,7 @@ func (e *engineClient) Exec(ctx context.Context, id string, spec ExecSpec) (*Exe
 	created, err := cli.ContainerExecCreate(ctx, id, container.ExecOptions{
 		Cmd:          spec.Cmd,
 		User:         spec.User,
+		AttachStdin:  spec.Stdin != nil,
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -413,6 +420,18 @@ func (e *engineClient) Exec(ctx context.Context, id string, spec ExecSpec) (*Exe
 	attach, err := cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/%s: exec attach on %s: %w", e.engine, id, err)
+	}
+
+	// Feed stdin to the command when the caller supplied it. The copy runs in
+	// its own goroutine so a large dump streams in rather than being buffered,
+	// and the write half is closed on completion so the command reads EOF and
+	// exits. A copy error (most often the command closing its input early) is
+	// left to surface through the command's own exit code in Wait.
+	if spec.Stdin != nil {
+		go func() {
+			_, _ = io.Copy(attach.Conn, spec.Stdin)
+			_ = attach.CloseWrite()
+		}()
 	}
 
 	stdoutR, stdoutW := io.Pipe()
