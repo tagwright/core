@@ -52,3 +52,10 @@
 /test/integration/repos-podman/
 /test/integration/restore-podman/
 /test/integration/secrets-podman/
+
+# Central docs system: docs/, CLAUDE.md, and CHARTER.md live on disk here but
+# are versioned centrally into the projects-docs repo, never in this public
+# repo. See the projects and tagwright CLAUDE.md.
+/docs/
+/CLAUDE.md
+/CHARTER.md
