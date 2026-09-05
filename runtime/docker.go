@@ -4,7 +4,7 @@
 package runtime
 
 // Compose label keys Docker attaches to a container that a compose file
-// brought up. Their presence (and value) is how Ballast recovers the
+// brought up. Their presence (and value) is how a consumer recovers the
 // project/service grouping without parsing any compose YAML itself.
 const (
 	composeProjectLabel = "com.docker.compose.project"
@@ -12,7 +12,7 @@ const (
 )
 
 // DockerRuntime is the Docker adapter for Runtime. It talks to the Docker
-// Engine API over the socket Ballast mounts read-only, using the request and
+// Engine API over the socket a consumer mounts read-only, using the request and
 // mapping machinery in engine.go that it shares with PodmanRuntime.
 //
 // The client is created lazily on first use and cached, so constructing a
@@ -40,8 +40,8 @@ var _ NetworkInspector = (*DockerRuntime)(nil)
 
 // compile-time assertion that the adapter also satisfies the optional
 // Provisioner capability, via the create/remove methods on engineClient
-// (provision.go). This is the surface ballast verify drives to stand up and
-// tear down a throwaway restore sandbox.
+// (provision.go). This is the surface a consumer's verify or restore flow
+// drives to stand up and tear down a throwaway restore sandbox.
 var _ Provisioner = (*DockerRuntime)(nil)
 
 // dockerComposeIdentity resolves compose project/service names from

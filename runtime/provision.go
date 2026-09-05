@@ -19,8 +19,8 @@ import (
 // Provisioner is an optional capability a Runtime implementation may satisfy
 // in addition to Runtime, for standing up and tearing down throwaway objects:
 // a fresh isolated network, empty volumes, and a container created from an
-// image with those volumes mounted. It is the surface ballast's `ballast
-// verify` command drives to prove a restore in a sandbox that has no path to
+// image with those volumes mounted. It is the surface a consumer's verify
+// flow drives to prove a restore in a sandbox that has no path to
 // production.
 //
 // Like NetworkInspector, it is kept as a separate interface rather than a set

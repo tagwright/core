@@ -2,12 +2,12 @@
 // Copyright (C) 2026 techgaud
 
 // Package runtime abstracts a container runtime (Docker or Podman) behind the
-// small set of operations Ballast needs: discover containers and their mounts,
+// small set of operations a consumer needs: discover containers and their mounts,
 // watch the socket for lifecycle changes, exec into a container to quiesce or
 // dump it, and stop or start it for a cold backup.
 //
 // The interface is deliberately kept free of any tool-specific type. It was
-// shaped against exactly one real consumer (Ballast) before being lifted into
+// shaped against exactly one real consumer before being lifted into
 // github.com/tagwright/core, which is the discipline that keeps the abstraction
 // honest.
 //
@@ -26,7 +26,7 @@ import (
 // ErrNotImplemented is returned by adapter methods that are not wired up yet.
 var ErrNotImplemented = errors.New("runtime: not implemented")
 
-// Runtime is a container runtime Ballast can drive. Implementations must be safe
+// Runtime is a container runtime a consumer can drive. Implementations must be safe
 // for concurrent use by multiple goroutines.
 type Runtime interface {
 	// List returns every container the runtime knows about, running or not.
@@ -131,7 +131,7 @@ type Container struct {
 	Networks []ContainerNetwork
 }
 
-// MountType distinguishes the kinds of mount Ballast cares about.
+// MountType distinguishes the kinds of mount a consumer cares about.
 type MountType string
 
 const (

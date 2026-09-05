@@ -58,7 +58,7 @@ type engineClient struct {
 
 // clientFor returns the cached engine API client, creating it on first call.
 // API version negotiation means the client adapts to whatever the daemon on
-// the other end of the socket speaks, rather than pinning a version Ballast
+// the other end of the socket speaks, rather than pinning a version core
 // has to keep in lockstep with the engine.
 func (e *engineClient) clientFor() (*client.Client, error) {
 	e.mu.Lock()
@@ -193,7 +193,7 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 // mapContainerNetworks translates the Docker Engine API's per-network
 // endpoint settings (keyed by network name, shared verbatim between the
 // list summary's NetworkSettingsSummary and inspect's NetworkSettings) into
-// Ballast's normalized ContainerNetwork slice. IP address strings that fail
+// core's normalized ContainerNetwork slice. IP address strings that fail
 // to parse (most commonly an empty string, when a container holds no
 // address on one address family) are skipped rather than failing the whole
 // mapping. The result is sorted by network name for a deterministic order,
@@ -247,7 +247,7 @@ func (e *engineClient) ListNetworks(ctx context.Context) ([]Network, error) {
 }
 
 // mapNetworkSummary translates a Docker Engine API network summary into
-// Ballast's normalized Network type. network.Summary is a type alias for
+// core's normalized Network type. network.Summary is a type alias for
 // network.Inspect as of the docker/docker v28.5.2 SDK this package depends
 // on, so NetworkList already returns IPAM, Driver, Internal, and Labels in
 // full: no follow-up NetworkInspect call per network is needed to populate
@@ -278,10 +278,10 @@ func mapNetworkSummary(n network.Summary) Network {
 	}
 }
 
-// mapMountPoint translates a Docker Engine API mount point into Ballast's
+// mapMountPoint translates a Docker Engine API mount point into core's
 // normalized Mount type. Anything the engine reports that is not a
 // recognized bind or tmpfs mount is treated as a named volume, which is the
-// common case and the one Ballast most needs to get right (it is what gets
+// common case and the one a consumer most needs to get right (it is what gets
 // dumped or archived). Podman's compat API reports mounts in the same
 // shape, so this mapping is engine-agnostic.
 func mapMountPoint(m container.MountPoint) Mount {
@@ -304,8 +304,8 @@ func mapMountPoint(m container.MountPoint) Mount {
 	}
 }
 
-// mapEventAction translates a Docker Engine API event action into Ballast's
-// normalized EventType. Actions Ballast does not act on (health checks,
+// mapEventAction translates a Docker Engine API event action into core's
+// normalized EventType. Actions a consumer does not act on (health checks,
 // exec, resize, and the like) are reported as not-ok so the caller can skip
 // them.
 //

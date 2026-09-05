@@ -95,8 +95,9 @@ func defaultPodmanSocket() string {
 // podmanComposeIdentity resolves compose project/service names from a
 // Podman-managed container's labels. The Docker-compatible
 // com.docker.compose.* pair is preferred, since podman-compose sets it
-// alongside its own io.podman.compose.* pair and the rest of Ballast
-// already expects that label vocabulary; the io.podman.compose.* pair is
+// alongside its own io.podman.compose.* pair and the rest of core's
+// compose-identity handling already expects that label vocabulary; the
+// io.podman.compose.* pair is
 // used only as a fallback when the compat labels are absent.
 func podmanComposeIdentity(labels map[string]string) (project, service string) {
 	if project, service = labels[composeProjectLabel], labels[composeServiceLabel]; service != "" {

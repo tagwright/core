@@ -37,7 +37,7 @@ func TestMapEventActionDestroyAndRemoveBothMapToEventDestroy(t *testing.T) {
 }
 
 // TestMapEventActionKnownActions locks in the rest of the mapping so a
-// future edit that silently drops one of Ballast's four acted-on lifecycle
+// future edit that silently drops one of the four acted-on lifecycle
 // events (start, stop, die, and destroy/remove above) fails a test instead
 // of shipping quietly.
 func TestMapEventActionKnownActions(t *testing.T) {
@@ -57,7 +57,7 @@ func TestMapEventActionKnownActions(t *testing.T) {
 	}
 }
 
-// TestMapEventActionUnknownActionIsSkipped proves an action Ballast does
+// TestMapEventActionUnknownActionIsSkipped proves an action a consumer does
 // not act on (health checks, exec, resize, and the like) reports ok=false
 // rather than a zero-value EventType the caller might mistake for
 // meaningful.
