@@ -123,6 +123,24 @@ type Container struct {
 	// healthcheck. Inspect-only.
 	Health string
 
+	// ExitCode is the exit code of the container's main process from its last
+	// run, read off Docker's inspect State.ExitCode. It is 0 for a container
+	// that is still running or that exited cleanly, so a consumer treating a
+	// non-zero value as a failure must pair it with the State ("exited") or a
+	// die event rather than reading it in isolation. Inspect-only.
+	ExitCode int
+
+	// OOMKilled reports whether the container's last exit was the kernel OOM
+	// killer reaping it, read off Docker's inspect State.OOMKilled. Inspect-only.
+	OOMKilled bool
+
+	// RestartCount is how many times the runtime has restarted this container
+	// under its restart policy, read off Docker's inspect RestartCount. A
+	// consumer watching for a crash loop reads this alongside the start events
+	// from Watch; core surfaces the count and leaves the loop policy to the
+	// consumer. Inspect-only.
+	RestartCount int
+
 	// Networks lists the container's network attachments and the IP
 	// addresses it holds on each. Unlike Image/LogDriver/Env/Health, the
 	// list summary carries this data at no extra cost (it is already part
@@ -157,6 +175,23 @@ const (
 	EventStop    EventType = "stop"
 	EventDie     EventType = "die"
 	EventDestroy EventType = "destroy"
+
+	// EventOOM is the kernel OOM killer reaping a container's main process,
+	// from Docker's "oom" event action. It arrives on its own, ahead of the
+	// "die" the reaped process then triggers, so a consumer that wants to
+	// distinguish an out-of-memory kill from an ordinary non-zero exit keys on
+	// this rather than inferring it from the die alone.
+	EventOOM EventType = "oom"
+
+	// EventHealthStatusHealthy and EventHealthStatusUnhealthy are a container's
+	// healthcheck transitioning, from Docker's "health_status: healthy" and
+	// "health_status: unhealthy" event actions. Docker emits one only when the
+	// aggregated health state changes, not on every probe, so each event is an
+	// edge a consumer can act on directly. The bare "health_status" action
+	// (with no healthy/unhealthy suffix) is not one of these and is not
+	// surfaced.
+	EventHealthStatusHealthy   EventType = "health_status: healthy"
+	EventHealthStatusUnhealthy EventType = "health_status: unhealthy"
 )
 
 // Event is a single lifecycle change on the socket.

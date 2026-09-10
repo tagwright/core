@@ -147,8 +147,12 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 
 	state := ""
 	health := ""
+	exitCode := 0
+	oomKilled := false
 	if info.State != nil {
 		state = info.State.Status
+		exitCode = info.State.ExitCode
+		oomKilled = info.State.OOMKilled
 		// State.Health is nil when the container has no HEALTHCHECK, so the
 		// pointer must be guarded before reading its status.
 		if info.State.Health != nil {
@@ -187,6 +191,11 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 		Env:       env,
 		Health:    health,
 		Networks:  networks,
+		ExitCode:  exitCode,
+		OOMKilled: oomKilled,
+		// RestartCount lives on the inspect base, not State, and is always
+		// present, so it needs no nil guard.
+		RestartCount: info.RestartCount,
 	}, nil
 }
 
@@ -305,9 +314,12 @@ func mapMountPoint(m container.MountPoint) Mount {
 }
 
 // mapEventAction translates a Docker Engine API event action into core's
-// normalized EventType. Actions a consumer does not act on (health checks,
-// exec, resize, and the like) are reported as not-ok so the caller can skip
-// them.
+// normalized EventType. Beyond the four lifecycle transitions (start, stop,
+// die, destroy) it also surfaces the OOM kill and the two health-status
+// transitions (healthy, unhealthy) a watch-path consumer keys on. Actions a
+// consumer does not act on (exec, resize, the bare "health_status" prefix
+// without a suffix, and the like) are reported as not-ok so the caller can
+// skip them.
 //
 // Podman's compat event stream reuses most of the same action vocabulary,
 // but not all of it: where a real Docker daemon emits "destroy" for a
@@ -328,6 +340,12 @@ func mapEventAction(action events.Action) (EventType, bool) {
 		return EventDie, true
 	case events.ActionDestroy, events.ActionRemove:
 		return EventDestroy, true
+	case events.ActionOOM:
+		return EventOOM, true
+	case events.ActionHealthStatusHealthy:
+		return EventHealthStatusHealthy, true
+	case events.ActionHealthStatusUnhealthy:
+		return EventHealthStatusUnhealthy, true
 	default:
 		return "", false
 	}
