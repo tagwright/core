@@ -58,11 +58,36 @@ func TestMapEventActionKnownActions(t *testing.T) {
 }
 
 // TestMapEventActionUnknownActionIsSkipped proves an action a consumer does
-// not act on (health checks, exec, resize, and the like) reports ok=false
-// rather than a zero-value EventType the caller might mistake for
-// meaningful.
+// not act on (exec, resize, and the like) reports ok=false rather than a
+// zero-value EventType the caller might mistake for meaningful. The bare
+// "health_status" action carries no healthy/unhealthy verdict, so it too is
+// skipped: only its suffixed forms below are surfaced.
 func TestMapEventActionUnknownActionIsSkipped(t *testing.T) {
 	if _, ok := mapEventAction(events.ActionHealthStatus); ok {
 		t.Fatalf("mapEventAction(health_status): got ok=true, want false")
+	}
+}
+
+// TestMapEventActionWatchSignals locks in the watch-path additions the beacon
+// notification service consumes: the OOM kill and the two health-status
+// transitions. Docker reports the OOM as "oom" and the health edges as
+// "health_status: healthy" / "health_status: unhealthy" (the suffixed
+// actions, distinct from the bare "health_status" prefix asserted skipped
+// above). A future edit that drops one of these fails here instead of
+// silently starving beacon of the signal it watches for.
+func TestMapEventActionWatchSignals(t *testing.T) {
+	cases := []struct {
+		action events.Action
+		want   EventType
+	}{
+		{events.ActionOOM, EventOOM},
+		{events.ActionHealthStatusHealthy, EventHealthStatusHealthy},
+		{events.ActionHealthStatusUnhealthy, EventHealthStatusUnhealthy},
+	}
+	for _, c := range cases {
+		et, ok := mapEventAction(c.action)
+		if !ok || et != c.want {
+			t.Fatalf("mapEventAction(%q) = (%q, %v), want (%q, true)", c.action, et, ok, c.want)
+		}
 	}
 }

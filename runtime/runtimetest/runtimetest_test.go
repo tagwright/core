@@ -114,6 +114,68 @@ func TestScriptedEvents(t *testing.T) {
 	}
 }
 
+// TestScriptedWatchSignals proves the fake can drive a watch loop through the
+// richer signals core v0.6.0 added for beacon: an OOM kill and the two
+// health-status transitions, alongside the classic lifecycle events. The fake
+// carries these for free (Emit takes any runtime.Event), so this locks in that
+// a consumer's test can script the full sequence deterministically.
+func TestScriptedWatchSignals(t *testing.T) {
+	ctx := context.Background()
+	rt := runtimetest.New()
+	events, _ := rt.Watch(ctx)
+
+	want := []runtime.EventType{
+		runtime.EventOOM,
+		runtime.EventDie,
+		runtime.EventHealthStatusUnhealthy,
+		runtime.EventHealthStatusHealthy,
+	}
+	for _, et := range want {
+		rt.Emit(runtime.Event{Type: et, ID: "c1", Name: "svc"})
+	}
+	rt.CloseWatch()
+
+	var got []runtime.EventType
+	for ev := range events {
+		got = append(got, ev.Type)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("scripted watch signals: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("scripted watch signals[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestInspectExposesFailureFields proves the fake round-trips the inspect
+// fields core v0.6.0 added (ExitCode, OOMKilled, RestartCount) that beacon
+// reads to tell an OOM kill and a crash loop from an ordinary exit. They are
+// plain fields on runtime.Container, so a consumer's test populates Containers
+// and reads them straight back off Inspect.
+func TestInspectExposesFailureFields(t *testing.T) {
+	ctx := context.Background()
+	rt := runtimetest.New()
+	rt.Containers = []runtime.Container{{
+		ID:           "c1",
+		Name:         "svc",
+		State:        "exited",
+		ExitCode:     137,
+		OOMKilled:    true,
+		RestartCount: 5,
+	}}
+
+	c, err := rt.Inspect(ctx, "svc")
+	if err != nil {
+		t.Fatalf("Inspect: unexpected error %v", err)
+	}
+	if c.ExitCode != 137 || !c.OOMKilled || c.RestartCount != 5 {
+		t.Fatalf("Inspect failure fields: got ExitCode=%d OOMKilled=%v RestartCount=%d, want 137/true/5",
+			c.ExitCode, c.OOMKilled, c.RestartCount)
+	}
+}
+
 func TestClockAdvances(t *testing.T) {
 	c := runtimetest.NewClock(time.Unix(0, 0).UTC(), time.Minute)
 	t0 := c.Now()
