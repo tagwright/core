@@ -11,6 +11,10 @@ const (
 	composeServiceLabel = "com.docker.compose.service"
 )
 
+// defaultDockerSocket is the conventional Docker Engine API socket path,
+// used when NewDocker is called with an empty socket argument.
+const defaultDockerSocket = "/var/run/docker.sock"
+
 // DockerRuntime is the Docker adapter for Runtime. It talks to the Docker
 // Engine API over the socket a consumer mounts read-only, using the request and
 // mapping machinery in engine.go that it shares with PodmanRuntime.
@@ -22,8 +26,16 @@ type DockerRuntime struct {
 	*engineClient
 }
 
-// NewDocker returns a Docker adapter bound to the given API socket path.
+// NewDocker returns a Docker adapter bound to the given API socket path. An
+// empty socket resolves to the conventional /var/run/docker.sock, matching
+// what a consumer means by "empty uses the runtime default" and mirroring
+// NewPodman's own empty-socket handling. A non-empty socket is used verbatim,
+// exactly as before, so this never builds a bare "unix://" the Docker SDK
+// cannot parse.
 func NewDocker(socket string) *DockerRuntime {
+	if socket == "" {
+		socket = defaultDockerSocket
+	}
 	return &DockerRuntime{engineClient: &engineClient{
 		engine:   "docker",
 		socket:   socket,
