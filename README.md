@@ -1,17 +1,23 @@
 # tagwright/core
 
-Shared building blocks for the tagwright suite. The first piece is `runtime`, a
-container-runtime abstraction over Docker and Podman. It talks to a Docker Engine
-API-compatible socket and exposes the operations the suite's tools need: list and
-inspect containers, watch the socket for lifecycle events, read compose
-project/service labels, stop and start containers, exec into them, and a set of
-normalized Container and Mount types so callers do not deal in engine-specific
-shapes. A single request-and-mapping core is shared by a Docker adapter and a
-Podman adapter that differ only in their default socket path and how they read
-compose identity off a container's labels.
+Shared Go building blocks for the tagwright suite. The first piece is
+`runtime`, a container-runtime abstraction over Docker and Podman. It talks to a
+Docker Engine API-compatible socket and exposes the operations the suite's tools
+need: list and inspect containers, watch the socket for lifecycle events, read
+compose project/service labels, stop and start containers, exec into them, and a
+set of normalized Container and Mount types so callers do not deal in
+engine-specific shapes. A single request-and-mapping core is shared by a Docker
+adapter and a Podman adapter that differ only in their default socket path and
+how they read compose identity off a container's labels.
 
 This module is a leaf: its only non-stdlib dependency is the Docker SDK. It was
 extracted from ballast so a second consumer can share the same abstraction.
+
+## Install
+
+    go get github.com/tagwright/core
+
+Import it as `github.com/tagwright/core/runtime`.
 
 ## Optional capabilities
 
@@ -36,8 +42,8 @@ capability it wants:
   `RemoveVolume`, `CreateContainer` (volume mounts, on a network, no published
   ports, created but started only on request), and `RemoveContainer` (with its
   anonymous volumes). Every create spec carries a `Labels` map so a caller can
-  find and sweep orphans after a crash. The caller owns teardown; core does
-  not. Both the Docker and Podman adapters satisfy it. This is the surface
+  find and sweep orphans after a crash. The caller owns teardown, not core.
+  Both the Docker and Podman adapters satisfy it. This is the surface
   ballast's `ballast verify` command drives.
 
 ## Normalized types
@@ -66,5 +72,11 @@ capability it wants:
   and health.
 - v0.1.0: initial extraction from ballast. The `Runtime` abstraction over Docker
   and Podman with normalized `Container` and `Mount` types.
+
+## Testing
+
+Coverage is documented honestly in [docs/TESTING.md](docs/TESTING.md), broken
+down by capability and by engine: what is proven against a live socket, what is
+compile-verified only, and what is still untested against a real Podman host.
 
 Licensed under GPL-3.0-or-later. See LICENSE.
