@@ -79,4 +79,7 @@ Coverage is documented honestly in [docs/TESTING.md](docs/TESTING.md), broken
 down by capability and by engine: what is proven against a live socket, what is
 compile-verified only, and what is still untested against a real Podman host.
 
+The security posture, and what a consumer is granting when it hands core a
+runtime socket, is written up in [docs/SECURITY.md](docs/SECURITY.md).
+
 Licensed under GPL-3.0-or-later. See LICENSE.
