@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-connections/nat"
 )
 
 // composeIdentityFunc resolves a container's compose project and service
@@ -161,11 +163,13 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 	}
 
 	// HostConfig is present on inspect but absent from the list summary, so
-	// LogDriver only populates here. It stays empty when HostConfig is nil.
+	// LogDriver and RestartPolicy only populate here. They stay empty when
+	// HostConfig is nil.
 	logDriver := ""
 	if info.HostConfig != nil {
 		logDriver = info.HostConfig.LogConfig.Type
 	}
+	restartPolicy := restartPolicyName(info.HostConfig)
 
 	mounts := make([]Mount, 0, len(info.Mounts))
 	for _, m := range info.Mounts {
@@ -173,30 +177,104 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 	}
 
 	var networks []ContainerNetwork
+	var ports []Port
 	if info.NetworkSettings != nil {
 		networks = mapContainerNetworks(info.NetworkSettings.Networks)
+		ports = mapContainerPorts(info.NetworkSettings.Ports)
 	}
 
 	project, service := e.identity(labels)
 	return Container{
-		ID:        info.ID,
-		Name:      strings.TrimPrefix(info.Name, "/"),
-		State:     state,
-		Labels:    labels,
-		Mounts:    mounts,
-		Project:   project,
-		Service:   service,
-		Image:     image,
-		LogDriver: logDriver,
-		Env:       env,
-		Health:    health,
-		Networks:  networks,
-		ExitCode:  exitCode,
-		OOMKilled: oomKilled,
+		ID:            info.ID,
+		Name:          strings.TrimPrefix(info.Name, "/"),
+		State:         state,
+		Labels:        labels,
+		Mounts:        mounts,
+		Project:       project,
+		Service:       service,
+		Image:         image,
+		LogDriver:     logDriver,
+		Env:           env,
+		Health:        health,
+		Networks:      networks,
+		Ports:         ports,
+		RestartPolicy: restartPolicy,
+		ExitCode:      exitCode,
+		OOMKilled:     oomKilled,
 		// RestartCount lives on the inspect base, not State, and is always
 		// present, so it needs no nil guard.
 		RestartCount: info.RestartCount,
 	}, nil
+}
+
+// restartPolicyName reads the configured restart-policy name off an inspect
+// HostConfig, guarding the nil HostConfig the engine reports for a container
+// that carries none (or that a partial response omits) so the read never
+// panics. The value is the policy the container was created with, e.g. "no",
+// "always", "unless-stopped", or "on-failure", and empty when HostConfig is
+// nil. Unlike the RestartCount live counter, this is a static configuration
+// field, so no separate list-vs-inspect distinction applies beyond HostConfig
+// being inspect-only.
+func restartPolicyName(hc *container.HostConfig) string {
+	if hc == nil {
+		return ""
+	}
+	return string(hc.RestartPolicy.Name)
+}
+
+// mapContainerPorts translates the Docker Engine API's published-port map
+// (NetworkSettings.Ports, keyed by "port/proto" with a list of host bindings
+// per key) into core's normalized Port slice. It emits one Port per host
+// binding, so a port published to both an IPv4 and an IPv6 host address yields
+// two entries; a key with no bindings (a port exposed by the image but not
+// published to the host) yields none. Podman's compat API reports ports in the
+// same shape, so this mapping is engine-agnostic.
+//
+// The container port comes from the key ("80/tcp" -> 80, "tcp"); the host port
+// comes from the binding string ("8080" -> 8080). A host-port string that does
+// not parse is carried as 0 rather than failing the whole mapping, which does
+// not happen for a well-formed engine response. The result is sorted for a
+// deterministic order (by container port, then protocol, host IP, host port),
+// since the engine's map iteration is not, and a churning order would break a
+// consumer's regenerate-and-compare invariant.
+func mapContainerPorts(ports nat.PortMap) []Port {
+	if len(ports) == 0 {
+		return nil
+	}
+
+	out := make([]Port, 0, len(ports))
+	for key, bindings := range ports {
+		containerPort := key.Int()
+		proto := key.Proto()
+		for _, b := range bindings {
+			hostPort := 0
+			if b.HostPort != "" {
+				if n, err := strconv.Atoi(b.HostPort); err == nil {
+					hostPort = n
+				}
+			}
+			out = append(out, Port{
+				ContainerPort: containerPort,
+				HostPort:      hostPort,
+				Protocol:      proto,
+				HostIP:        b.HostIP,
+			})
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ContainerPort != out[j].ContainerPort {
+			return out[i].ContainerPort < out[j].ContainerPort
+		}
+		if out[i].Protocol != out[j].Protocol {
+			return out[i].Protocol < out[j].Protocol
+		}
+		if out[i].HostIP != out[j].HostIP {
+			return out[i].HostIP < out[j].HostIP
+		}
+		return out[i].HostPort < out[j].HostPort
+	})
+	return out
 }
 
 // mapContainerNetworks translates the Docker Engine API's per-network

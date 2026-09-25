@@ -94,6 +94,39 @@ type ContainerNetwork struct {
 	IPs  []netip.Addr
 }
 
+// Port is one published host binding of a container port, as the runtime's
+// inspect reports it.
+//
+// One Port is emitted per host binding, mirroring what inspect's
+// NetworkSettings.Ports carries: a container port published to two host
+// interfaces (a v4 0.0.0.0 binding and a v6 :: binding, say) yields two
+// entries, and a container port that is exposed but not published to the host
+// carries no binding and so contributes no Port at all. A consumer deciding
+// whether a service is reachable from off-host reads HostPort together with
+// HostIP: an empty or 0.0.0.0 HostIP means "every interface", a loopback
+// HostIP (127.0.0.1 or ::1) means host-only.
+type Port struct {
+	// ContainerPort is the container-side port number, e.g. 80. It is 0 when
+	// the inspect key does not parse as a number, which does not happen for a
+	// well-formed engine response.
+	ContainerPort int
+
+	// HostPort is the host-side published port number the binding maps to. It
+	// is 0 only when the binding carries no host port, which in practice does
+	// not occur (an exposed-but-unpublished port has no binding and so yields
+	// no Port at all).
+	HostPort int
+
+	// Protocol is the port's protocol, "tcp", "udp", or "sctp", read off the
+	// inspect key's suffix.
+	Protocol string
+
+	// HostIP is the host interface the port is bound on, as inspect provides
+	// it: an explicit address, "0.0.0.0"/"::" for all interfaces, or "" when
+	// the engine reports none.
+	HostIP string
+}
+
 // Container is the normalized view of a container across runtimes.
 type Container struct {
 	ID      string
@@ -147,6 +180,24 @@ type Container struct {
 	// of the same API response), so Networks is populated on both List and
 	// Inspect.
 	Networks []ContainerNetwork
+
+	// Ports lists the container's published host port bindings, one entry per
+	// binding, read off Docker's inspect NetworkSettings.Ports. HostConfig is
+	// not needed for these (the bindings live on NetworkSettings), but the
+	// list summary's port view is thinner, so core populates Ports on Inspect
+	// only and leaves it nil on List. It is nil when the container publishes
+	// nothing. See Port for the per-binding shape and the reachability
+	// interpretation of HostIP.
+	Ports []Port
+
+	// RestartPolicy is the container's configured restart policy name, e.g.
+	// "no", "always", "unless-stopped", "on-failure", read off Docker's
+	// inspect HostConfig.RestartPolicy.Name. Unlike RestartCount (a live
+	// counter), this is the policy the container was created with. It is
+	// Inspect-only (the list summary carries no HostConfig) and empty when
+	// unknown. A consumer distinguishes a long-running service from a one-shot
+	// job by reading this rather than inferring it from State.
+	RestartPolicy string
 }
 
 // MountType distinguishes the kinds of mount a consumer cares about.
