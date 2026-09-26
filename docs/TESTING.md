@@ -48,8 +48,8 @@ host with no daemon. Run it with the socket mounted into the golang container
 
 ## Podman
 
-Proven at the decode-and-map contract level (hermetic), and end to end pending a
-live socket.
+Proven at the decode-and-map contract level (hermetic) and end to end against a
+live Podman socket.
 
 Hermetic. `TestPodmanFixture...` decode captured Podman compat-API JSON
 (`/containers/json`, `/containers/{id}/json` including an unbound `"HostIp": ""`
@@ -61,15 +61,21 @@ reads. These need no Podman host and run in the offline suite, so they carry the
 Podman coverage for those fields today. The fixtures live in
 `runtime/testdata/podman_*.json`.
 
-Live, pending a socket. `TestProvisionerPodmanRoundTrip` mirrors the Docker
-round-trip on `NewPodman` with the same Watch/Inspect/Kill/Stop coverage, proving
+Live, proven. `TestProvisionerPodmanRoundTrip` mirrors the Docker round-trip on
+`NewPodman` with the same Watch/Inspect/Kill/Stop coverage, proving
 `WithAPIVersionNegotiation` negotiates a working API version against a real
 Podman compat socket (including Podman's `remove`->`EventDestroy` compat-event
 quirk). It skips cleanly when no Podman compat socket is reachable, so the
-offline suite stays green, and is fully written and ready; it has not yet been
-run against a live Podman host from the build environment. To run it, reach the
-homelab Podman compat socket into the test container (mount it and set
-`CONTAINER_HOST=unix:///path`, or mount it at `/run/podman/podman.sock`) and run
+offline suite stays green.
+
+Last run: PASS (10.80s) on 2026-09-26 against Podman Engine 5.8.4, via an
+ephemeral rootless podman-in-a-container harness (`quay.io/podman/stable`, the
+`podman system service` compat socket shared into the test container over a
+docker volume). The harness was stood up for the run and torn down immediately
+after with zero residue, and it ran its own nested engine in isolation from the
+host runtime. To reproduce, reach a Podman compat socket into the test container
+(mount it and set `CONTAINER_HOST=unix:///path`, or mount it at
+`/run/podman/podman.sock`) and run
 `go test ./runtime -run TestProvisionerPodmanRoundTrip -v`.
 
 ## Public API stability
