@@ -6,7 +6,7 @@ package runtime
 import (
 	"testing"
 
-	"github.com/docker/docker/api/types/events"
+	"github.com/moby/moby/api/types/events"
 )
 
 // TestMapEventActionDestroyAndRemoveBothMapToEventDestroy proves both

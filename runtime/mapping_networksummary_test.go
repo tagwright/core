@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/network"
 )
 
 // mapNetworkSummary produces the normalized Network a consumer's egress
@@ -34,7 +34,7 @@ func TestMapNetworkSummaryInternalFlag(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := mapNetworkSummary(network.Summary{Name: c.name, Internal: c.internal})
+			got := mapNetworkSummary(network.Summary{Network: network.Network{Name: c.name, Internal: c.internal}})
 			if got.Internal != c.internal {
 				t.Fatalf("mapNetworkSummary(Internal=%v).Internal = %v, want %v", c.internal, got.Internal, c.internal)
 			}
@@ -48,13 +48,13 @@ func TestMapNetworkSummaryInternalFlag(t *testing.T) {
 // driver, or reads a policy label, sees the engine's own values.
 func TestMapNetworkSummaryScalarFields(t *testing.T) {
 	labels := map[string]string{"com.tagwright.egress": "deny"}
-	in := network.Summary{
+	in := network.Summary{Network: network.Network{
 		Name:     "app-internal",
 		ID:       "net-id-1234",
 		Driver:   "bridge",
 		Internal: true,
 		Labels:   labels,
-	}
+	}}
 	got := mapNetworkSummary(in)
 
 	if got.Name != in.Name {
@@ -73,22 +73,30 @@ func TestMapNetworkSummaryScalarFields(t *testing.T) {
 
 // TestMapNetworkSummarySubnets proves the subnet parsing invariant: a well
 // formed IPv4 CIDR and a well formed IPv6 CIDR are both carried as
-// netip.Prefix in IPAM order, while an empty subnet and an unparseable one are
-// skipped defensively rather than failing the whole network. A malformed IPAM
-// entry on one network must not hide the rest of that network's subnets from a
-// caller doing egress classification.
+// netip.Prefix in IPAM order, while a zero-value (unset) subnet is skipped
+// rather than emitting an invalid Prefix. A valid entry must not be hidden by a
+// sibling zero entry, so a caller doing egress classification still sees every
+// real subnet.
+//
+// In the moby api types IPAMConfig.Subnet is already a netip.Prefix, so the old
+// deliberately-unparseable "not-a-cidr" string input can no longer be
+// expressed: a malformed subnet now fails JSON decoding of the whole
+// NetworkList response inside the client, before mapNetworkSummary runs (see
+// the finding 1b note in runtime.go). Per finding 2 that case is replaced by an
+// explicit zero-value entry carrying the same "must be skipped" intent, not by
+// relaxing the expectation.
 func TestMapNetworkSummarySubnets(t *testing.T) {
-	in := network.Summary{
+	in := network.Summary{Network: network.Network{
 		Name: "mixed",
 		IPAM: network.IPAM{
 			Config: []network.IPAMConfig{
-				{Subnet: "172.31.0.0/16"},
-				{Subnet: ""},           // skipped: empty
-				{Subnet: "not-a-cidr"}, // skipped: unparseable
-				{Subnet: "fd00::/64"},  // carried
+				{Subnet: netip.MustParsePrefix("172.31.0.0/16")}, // carried
+				{},                       // skipped: zero-value (unset) subnet
+				{Subnet: netip.Prefix{}}, // skipped: explicit zero-value subnet
+				{Subnet: netip.MustParsePrefix("fd00::/64")}, // carried
 			},
 		},
-	}
+	}}
 	got := mapNetworkSummary(in)
 
 	want := []netip.Prefix{
@@ -96,7 +104,7 @@ func TestMapNetworkSummarySubnets(t *testing.T) {
 		netip.MustParsePrefix("fd00::/64"),
 	}
 	if !reflect.DeepEqual(got.Subnets, want) {
-		t.Fatalf("Subnets = %v, want %v (empty and unparseable entries must be skipped, order preserved)", got.Subnets, want)
+		t.Fatalf("Subnets = %v, want %v (zero-value entries must be skipped, order preserved)", got.Subnets, want)
 	}
 }
 
@@ -104,7 +112,7 @@ func TestMapNetworkSummarySubnets(t *testing.T) {
 // an empty subnet slice rather than a panic, which is the common case for a
 // network the engine reports without an address pool.
 func TestMapNetworkSummaryNoSubnets(t *testing.T) {
-	got := mapNetworkSummary(network.Summary{Name: "poolless"})
+	got := mapNetworkSummary(network.Summary{Network: network.Network{Name: "poolless"}})
 	if len(got.Subnets) != 0 {
 		t.Fatalf("Subnets = %v, want empty", got.Subnets)
 	}

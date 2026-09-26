@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/docker/docker/api/types/network"
+	"github.com/moby/moby/api/types/network"
 )
 
 // mapContainerNetworks decides which networks a container is reported to be
@@ -83,28 +83,28 @@ func TestMapContainerNetworksNilEndpointSkipped(t *testing.T) {
 	}
 }
 
-// TestMapContainerNetworksIPs proves the address handling invariant: a
-// parseable IPv4 and a parseable IPv6 are both carried (IPv4 first, then
-// IPv6, matching the mapper's read order), while an empty or unparseable
-// address string is skipped rather than failing the whole attachment. An
-// empty IPv6 address is the common real case for a container that holds no
-// address on that family.
+// TestMapContainerNetworksIPs proves the address handling invariant: a valid
+// IPv4 and a valid IPv6 are both carried (IPv4 first, then IPv6, matching the
+// mapper's read order), while an unset (zero) address is skipped rather than
+// failing the whole attachment. In the moby api types the endpoint IP fields
+// are netip.Addr, so an unset address is the zero Addr (IsValid() == false),
+// which is the common real case for a container that holds no address on that
+// family.
 func TestMapContainerNetworksIPs(t *testing.T) {
 	in := map[string]*network.EndpointSettings{
 		"dual": {
 			NetworkID:         "id-dual",
-			IPAddress:         "172.31.0.6",
-			GlobalIPv6Address: "fd00::6",
+			IPAddress:         netip.MustParseAddr("172.31.0.6"),
+			GlobalIPv6Address: netip.MustParseAddr("fd00::6"),
 		},
 		"v4only": {
-			NetworkID:         "id-v4only",
-			IPAddress:         "10.0.0.2",
-			GlobalIPv6Address: "",
+			NetworkID: "id-v4only",
+			IPAddress: netip.MustParseAddr("10.0.0.2"),
+			// GlobalIPv6Address left as the zero Addr: unset, must be skipped.
 		},
 		"noaddr": {
-			NetworkID:         "id-noaddr",
-			IPAddress:         "",
-			GlobalIPv6Address: "",
+			NetworkID: "id-noaddr",
+			// Both IP fields left as the zero Addr: no parseable address.
 		},
 	}
 	got := mapContainerNetworks(in)

@@ -4,11 +4,12 @@
 package runtime
 
 import (
+	"net/netip"
 	"reflect"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 // mapContainerPorts decides which host port bindings a container is reported to
@@ -32,7 +33,7 @@ func TestMapContainerPortsEmpty(t *testing.T) {
 	if got := mapContainerPorts(nil); got != nil {
 		t.Fatalf("mapContainerPorts(nil) = %+v, want nil", got)
 	}
-	if got := mapContainerPorts(nat.PortMap{}); got != nil {
+	if got := mapContainerPorts(network.PortMap{}); got != nil {
 		t.Fatalf("mapContainerPorts(empty) = %+v, want nil", got)
 	}
 }
@@ -43,10 +44,12 @@ func TestMapContainerPortsEmpty(t *testing.T) {
 // container still comes through. This is the reachability invariant: only a real
 // host binding counts as a published port.
 func TestMapContainerPortsUnpublishedSkipped(t *testing.T) {
-	in := nat.PortMap{
-		"5432/tcp": nil,                                                      // exposed, not published
-		"9000/tcp": []nat.PortBinding{},                                      // published to nothing
-		"80/tcp":   []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: "8080"}}, // published
+	in := network.PortMap{
+		network.MustParsePort("5432/tcp"): nil,                     // exposed, not published
+		network.MustParsePort("9000/tcp"): []network.PortBinding{}, // published to nothing
+		network.MustParsePort("80/tcp"): []network.PortBinding{
+			{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"}, // published
+		},
 	}
 	got := mapContainerPorts(in)
 	want := []Port{{ContainerPort: 80, HostPort: 8080, Protocol: "tcp", HostIP: "0.0.0.0"}}
@@ -63,13 +66,13 @@ func TestMapContainerPortsUnpublishedSkipped(t *testing.T) {
 // address, two bindings under one key), so a mapper that returned map order, or
 // collapsed the dual binding, would fail.
 func TestMapContainerPortsMultiBindingSorted(t *testing.T) {
-	in := nat.PortMap{
-		"443/tcp": []nat.PortBinding{
-			{HostIP: "0.0.0.0", HostPort: "443"},
-			{HostIP: "::", HostPort: "443"},
+	in := network.PortMap{
+		network.MustParsePort("443/tcp"): []network.PortBinding{
+			{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "443"},
+			{HostIP: netip.MustParseAddr("::"), HostPort: "443"},
 		},
-		"53/udp": []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "53"}},
-		"80/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: "8080"}},
+		network.MustParsePort("53/udp"): []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "53"}},
+		network.MustParsePort("80/tcp"): []network.PortBinding{{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"}},
 	}
 	got := mapContainerPorts(in)
 	want := []Port{
@@ -90,13 +93,33 @@ func TestMapContainerPortsMultiBindingSorted(t *testing.T) {
 // does not happen for a well-formed engine response, but the mapping must not
 // panic or lose the entry if it does.
 func TestMapContainerPortsUnparseableHostPort(t *testing.T) {
-	in := nat.PortMap{
-		"80/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: "not-a-number"}},
+	in := network.PortMap{
+		network.MustParsePort("80/tcp"): []network.PortBinding{{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "not-a-number"}},
 	}
 	got := mapContainerPorts(in)
 	want := []Port{{ContainerPort: 80, HostPort: 0, Protocol: "tcp", HostIP: "0.0.0.0"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("mapContainerPorts = %+v, want %+v (unparseable host port -> 0, binding kept)", got, want)
+	}
+}
+
+// TestMapContainerPortsZeroHostIP proves a binding with a zero (unbound) HostIP
+// maps to the empty string, not the literal "invalid IP" that
+// netip.Addr{}.String() returns. This is finding 1a: in the moby api types
+// PortBinding.HostIP is a netip.Addr, so an unbound binding carries the zero
+// Addr, and runtime.go's Port contract promises "" for HostIP when the engine
+// reports none. A consumer classifying off-host reachability keys on HostIP, so
+// a zero address mis-mapped to a non-empty string would read as reachable.
+// Asserted offline here, independent of the live round-trip.
+func TestMapContainerPortsZeroHostIP(t *testing.T) {
+	in := network.PortMap{
+		// HostPort set but HostIP left as the zero Addr: an unbound host address.
+		network.MustParsePort("80/tcp"): []network.PortBinding{{HostPort: "8080"}},
+	}
+	got := mapContainerPorts(in)
+	want := []Port{{ContainerPort: 80, HostPort: 8080, Protocol: "tcp", HostIP: ""}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mapContainerPorts = %+v, want %+v (zero HostIP -> \"\", not \"invalid IP\")", got, want)
 	}
 }
 
