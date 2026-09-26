@@ -2,6 +2,8 @@ module github.com/tagwright/core
 
 go 1.25.0
 
+toolchain go1.25.14
+
 require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.8.1
