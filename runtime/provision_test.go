@@ -43,16 +43,19 @@ func dockerSocketForTest() string {
 	return ""
 }
 
-// TestProvisionerDockerRoundTrip exercises the full Provisioner surface against
-// a live Docker socket: pull a tiny image, create an isolated network and a
-// fresh volume, create and start a container with that volume mounted on that
-// network, assert (via NetworkInspector) that the network really is internal,
-// exec `true` as a probe, pipe a payload into a command's stdin and read it
-// back out, then tear every object down. Every object is prefixed
-// "core-itest-" and labelled, and every one is cleaned up via a deferred
-// remove registered the moment it is created, so a mid-test failure still
-// leaves nothing behind and nothing outside this test's own objects is ever
-// touched.
+// TestProvisionerDockerRoundTrip exercises the full Provisioner and Runtime
+// surface against a live Docker socket on the new moby client: pull a tiny
+// image, create an isolated network and a fresh volume, subscribe Watch, create
+// and start a container with that volume mounted on that network, assert the
+// start event carries the container id, Inspect the running container (state,
+// image, /data mount, a valid IP on the created network), assert (via
+// NetworkInspector) that the network really is internal, exec `true` as a probe,
+// pipe a payload into a command's stdin and read it back out, exercise Kill and
+// Stop on teardown, and assert the destroy event after RemoveContainer, then
+// tear every object down. Every object is prefixed "core-itest-" and labelled,
+// and every one is cleaned up via a deferred remove registered the moment it is
+// created, so a mid-test failure still leaves nothing behind and nothing outside
+// this test's own objects is ever touched.
 //
 // The test skips cleanly when no Docker socket is reachable from the build
 // environment, so `go test ./...` stays green on a host with no daemon.
@@ -61,15 +64,23 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 	if socket == "" {
 		t.Skip("no reachable Docker socket (set DOCKER_HOST=unix:///path or mount /var/run/docker.sock); skipping live provisioner test")
 	}
+	runProvisionerRoundTrip(t, NewDocker(socket), "docker")
+}
 
-	rt := NewDocker(socket)
+// runProvisionerRoundTrip is the engine-agnostic body of the live provisioner
+// round-trip, shared by the Docker (TestProvisionerDockerRoundTrip) and Podman
+// (TestProvisionerPodmanRoundTrip) tests. rt must satisfy Runtime, Provisioner,
+// and NetworkInspector; the caller has already confirmed a reachable socket.
+func runProvisionerRoundTrip(t *testing.T, rt interface {
+	Runtime
+	Provisioner
+	NetworkInspector
+}, engine string) {
+	t.Helper()
 	t.Cleanup(func() { _ = rt.Close() })
 
-	var prov Provisioner = rt // compile-time and runtime proof DockerRuntime satisfies Provisioner
-	inspector, ok := any(rt).(NetworkInspector)
-	if !ok {
-		t.Fatal("DockerRuntime does not satisfy NetworkInspector")
-	}
+	var prov Provisioner = rt
+	var inspector NetworkInspector = rt
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -78,7 +89,7 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 	// answers, skip rather than fail, so an environment with a stale socket
 	// does not turn into a spurious test failure.
 	if _, err := rt.List(ctx); err != nil {
-		t.Skipf("Docker socket %s present but not answering (%v); skipping live provisioner test", socket, err)
+		t.Skipf("%s socket present but not answering (%v); skipping live provisioner test", engine, err)
 	}
 
 	suffix := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
@@ -114,6 +125,18 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 		}
 	})
 
+	// Subscribe Watch BEFORE the container is created and started, so the start
+	// event cannot be missed to a race. The watch runs on its own cancellable
+	// context that outlives the container's create/inspect/teardown below, so
+	// the destroy event after RemoveContainer is observed too.
+	watchCtx, watchCancel := context.WithCancel(ctx)
+	defer watchCancel()
+	events, watchErrs := rt.Watch(watchCtx)
+
+	// ctrRemoved guards the safety-net cleanup: the container is torn down
+	// explicitly in-body (to observe the destroy event while the watch is live),
+	// so the deferred force-remove must not then fail on an already-gone id.
+	var ctrRemoved bool
 	ctrID, err := prov.CreateContainer(ctx, ContainerSpec{
 		Name:    ctrName,
 		Image:   itestImage,
@@ -127,6 +150,9 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 		// Register teardown even on a start error, since CreateContainer
 		// returns the id of a created-but-unstarted container.
 		t.Cleanup(func() {
+			if ctrRemoved {
+				return
+			}
 			if err := prov.RemoveContainer(context.Background(), ctrID, true); err != nil {
 				t.Errorf("cleanup RemoveContainer(%s): %v", ctrID, err)
 			}
@@ -136,13 +162,36 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 		t.Fatalf("CreateContainer(%s): %v", ctrName, err)
 	}
 
+	// The start event must arrive on Watch carrying the container id (finding 3).
+	waitForEvent(t, events, watchErrs, EventStart, ctrID, 30*time.Second)
+
+	// Inspect the running container and assert the fields a consumer reads off
+	// it: State running, the image, the /data mount, and a valid IP on the
+	// created network (finding 3).
+	inspected, err := rt.Inspect(ctx, ctrID)
+	if err != nil {
+		t.Fatalf("Inspect(%s): %v", ctrID, err)
+	}
+	if inspected.State != "running" {
+		t.Fatalf("Inspect: State = %q, want running", inspected.State)
+	}
+	if inspected.Image == "" {
+		t.Fatalf("Inspect: Image is empty, want the created image reference")
+	}
+	if !hasMountAt(inspected.Mounts, "/data") {
+		t.Fatalf("Inspect: no mount at /data, got %+v", inspected.Mounts)
+	}
+	if !hasValidIPOnNetwork(inspected.Networks, netName) {
+		t.Fatalf("Inspect: no valid IP on network %s, got %+v", netName, inspected.Networks)
+	}
+
 	// The isolation of the network is the compliance fact verify leans on, so
 	// assert it directly: the network the container is attached to reports
 	// Internal == true.
 	assertNetworkInternal(ctx, t, inspector, netName)
 
 	// Probe: exec `true` and confirm a clean exit and empty output.
-	probe, err := prov.(Runtime).Exec(ctx, ctrID, ExecSpec{Cmd: []string{"true"}})
+	probe, err := rt.Exec(ctx, ctrID, ExecSpec{Cmd: []string{"true"}})
 	if err != nil {
 		t.Fatalf("Exec(true): %v", err)
 	}
@@ -157,7 +206,7 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 	// Stream-restore path: pipe a payload into a command's stdin, then read it
 	// back to prove ExecSpec.Stdin is wired through end to end.
 	payload := "billet-verify-stream-restore\n"
-	writer, err := prov.(Runtime).Exec(ctx, ctrID, ExecSpec{
+	writer, err := rt.Exec(ctx, ctrID, ExecSpec{
 		Cmd:   []string{"sh", "-c", "cat > /data/restored"},
 		Stdin: strings.NewReader(payload),
 	})
@@ -169,7 +218,7 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 		t.Fatalf("Exec(stdin write): code=%d err=%v", code, err)
 	}
 
-	reader, err := prov.(Runtime).Exec(ctx, ctrID, ExecSpec{Cmd: []string{"cat", "/data/restored"}})
+	reader, err := rt.Exec(ctx, ctrID, ExecSpec{Cmd: []string{"cat", "/data/restored"}})
 	if err != nil {
 		t.Fatalf("Exec(read back): %v", err)
 	}
@@ -183,6 +232,78 @@ func TestProvisionerDockerRoundTrip(t *testing.T) {
 	if string(got) != payload {
 		t.Fatalf("stdin round-trip: got %q, want %q", got, payload)
 	}
+
+	// Teardown exercises Kill and Stop rather than leaning only on force-remove
+	// (finding 3). Kill delivers a harmless SIGCONT to the still-running
+	// container to prove the Kill path against the new client, then Stop stops it
+	// gracefully; only then is it removed with force=false, which the daemon
+	// answers with a destroy event.
+	if err := rt.Kill(ctx, ctrID, "SIGCONT"); err != nil {
+		t.Fatalf("Kill(SIGCONT): %v", err)
+	}
+	if err := rt.Stop(ctx, ctrID, 10); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := prov.RemoveContainer(ctx, ctrID, false); err != nil {
+		t.Fatalf("RemoveContainer(force=false): %v", err)
+	}
+	ctrRemoved = true
+
+	// The destroy event must arrive after removal (finding 3). Podman's compat
+	// API emits "remove" where Docker emits "destroy"; both normalize to
+	// EventDestroy, so this assertion holds on either engine.
+	waitForEvent(t, events, watchErrs, EventDestroy, ctrID, 30*time.Second)
+}
+
+// waitForEvent blocks until an event of the wanted type and container id arrives
+// on the watch stream, failing the test on the watch error channel or on
+// timeout. Events for other containers (a busy host) are ignored.
+func waitForEvent(t *testing.T, events <-chan Event, watchErrs <-chan error, want EventType, id string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatalf("watch event channel closed before a %q event for %s arrived", want, id)
+			}
+			if ev.Type == want && ev.ID == id {
+				return
+			}
+		case err := <-watchErrs:
+			if err != nil {
+				t.Fatalf("watch error while waiting for %q on %s: %v", want, id, err)
+			}
+		case <-deadline:
+			t.Fatalf("timed out after %s waiting for a %q event for %s", timeout, want, id)
+		}
+	}
+}
+
+// hasMountAt reports whether the mounts include one at the given destination.
+func hasMountAt(mounts []Mount, dest string) bool {
+	for _, m := range mounts {
+		if m.Destination == dest {
+			return true
+		}
+	}
+	return false
+}
+
+// hasValidIPOnNetwork reports whether the container holds at least one valid IP
+// on the named network.
+func hasValidIPOnNetwork(nets []ContainerNetwork, name string) bool {
+	for _, n := range nets {
+		if n.Name != name {
+			continue
+		}
+		for _, ip := range n.IPs {
+			if ip.IsValid() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // assertNetworkInternal fails the test unless the named network is present in
