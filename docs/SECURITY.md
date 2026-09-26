@@ -24,7 +24,7 @@ it lives with the consumer, not here.
 core itself holds nothing sensitive. It stores no secrets and no key material,
 keeps no datastore, and makes no network calls of its own. Its only outbound
 traffic is the runtime API over the socket the consumer points it at, and its
-only non-stdlib dependency is the Docker SDK.
+only non-stdlib dependency is the moby Engine API client.
 
 A few boundaries are the consumer's to hold, not core's:
 
@@ -41,35 +41,42 @@ None of this is a residual to apologize for. A runtime-abstraction library that
 talks to a socket has exactly this surface, and the honest posture is to name
 the socket grant as the boundary and stop there.
 
-## Known advisories against the Docker SDK dependency
+## Engine API client and its dependency posture
 
-core currently depends on `github.com/docker/docker` (the moby module) for its
-Engine API client. Two advisories are reported against that module:
+core drives the moby split-out Engine API client (`github.com/moby/moby/client`
+and `github.com/moby/moby/api`), the supported normal-semver replacements for the
+frozen `github.com/docker/docker` monolith. As of v0.9.0 the `docker/docker`
+dependency is gone.
+
+That migration removed the two advisories that used to be flagged here:
 
 - GO-2026-4887 / CVE-2026-34040: a Moby AuthZ plugin bypass on oversized request
   bodies.
 - GO-2026-4883 / CVE-2026-33997: an off-by-one error in Moby plugin-privilege
   validation.
 
-Neither is reachable in core, and the reason is structural. Both flaws live in
-the Docker daemon: one in the daemon's authorization-plugin path, the other in
-the daemon's plugin-install privilege validation. core is a pure API client. It
-runs no daemon, installs no plugins, and configures no authorization plugins, so
-it never executes either vulnerable code path. A source-level reachability scan
-(`govulncheck ./...`) confirms that core reaches these advisories only at the
-module-presence level, through ordinary client calls and package init, not
-through the vulnerable symbols. The advisory records carry no symbol data, which
-is why a dependency scanner cannot narrow them automatically and flags any import
-of the module regardless of which functions the caller uses.
+Both flaws lived in the Docker daemon, not in a client, so neither was ever
+reachable in core (which runs no daemon, installs no plugins, and configures no
+authorization plugins). They read "Fixed in: N/A" only because the fix went to
+the split-out modules rather than the frozen one, so a scanner flagged any import
+of `docker/docker` regardless. Moving to the maintained client modules drops the
+dependency and the findings outright: `govulncheck ./...` in the go1.25 toolchain
+now reports neither.
 
-These advisories also read "Fixed in: N/A" because the `github.com/docker/docker`
-module is frozen. The fix landed in Docker's split-out client modules
-(`github.com/moby/moby/client` and `github.com/moby/moby/api`). A planned release
-migrates core onto those modules, which removes the dependency and the finding
-outright. This section documents the waiver for the window until that migration
-lands: the advisories are present in the dependency graph but unreachable in a
-pure client, so they are accepted here with this justification rather than
-suppressed silently.
+## Supported API-version floor
+
+The moby client enforces a minimum Engine API version of `1.40`
+(`MinAPIVersion`). Below that floor the client returns an error on the first call
+rather than clamping to a lower version, so:
+
+- Podman 1.x and 2.x, and Docker older than 19.03, are no longer supported and
+  fail fast on first use.
+- Current Docker and supported Podman (compat API 1.40 at Podman v3.4/v4.0 and
+  higher after) are unaffected.
+
+This is a deliberate consequence of the client, not a policy core imposes on top,
+and it is stated here so a consumer pointing core at a very old daemon knows why
+the first call errors.
 
 ## Reporting a vulnerability
 

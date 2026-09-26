@@ -10,8 +10,10 @@ engine-specific shapes. A single request-and-mapping core is shared by a Docker
 adapter and a Podman adapter that differ only in their default socket path and
 how they read compose identity off a container's labels.
 
-This module is a leaf: its only non-stdlib dependency is the Docker SDK. It was
-extracted from ballast so a second consumer can share the same abstraction.
+This module is a leaf: its only non-stdlib dependency is the moby Engine API
+client (`github.com/moby/moby/client` and `github.com/moby/moby/api`, the
+split-out replacements for the frozen `github.com/docker/docker` monolith). It
+was extracted from ballast so a second consumer can share the same abstraction.
 
 ## Install
 
@@ -58,6 +60,32 @@ capability it wants:
 
 ## Versions
 
+- v0.9.0: moby client migration. The Engine API client moves off the frozen
+  `github.com/docker/docker v28.5.2+incompatible` monolith onto the split-out
+  `github.com/moby/moby/client v0.6.0` and `github.com/moby/moby/api v1.56.0`
+  modules, which removes the two unreachable-but-flagged docker/docker daemon
+  advisories (GO-2026-4887, GO-2026-4883) from the dependency graph. The public
+  API is unchanged: `Runtime`, `NetworkInspector`, `Provisioner`, every exported
+  type, and the `NewDocker`/`NewPodman` signatures are byte-identical, so a
+  consumer bumps to this tag with no code change. Four observable behavior
+  changes come with the reshaped api types and are why this is a minor, not a
+  patch:
+  - `Port.HostIP` for an unbound binding is now the empty string `""`, mapped
+    from the zero `netip.Addr`, where before it could carry the daemon's raw
+    value. A reachability consumer reads `""`/`0.0.0.0`/`::` as all-interfaces
+    and a loopback address as host-only, unchanged.
+  - A single malformed subnet or port key from the daemon now fails the whole
+    `ListNetworks` / `Inspect` call (the strongly-typed `netip.Prefix` /
+    `network.Port` decode rejects it inside the client) rather than silently
+    dropping the one bad entry. A well-formed daemon response never triggers
+    this, and empty values still decode to the zero value and are skipped.
+  - `PullImage` now surfaces an in-stream pull error (a `200` followed by an
+    `{"error": ...}` message) via the client's `Wait`, where the old
+    drain-and-discard swallowed it and a failed pull returned nil.
+  - The client enforces a `MinAPIVersion` of `1.40`, so Podman 1.x/2.x and
+    Docker older than 19.03 now error on the first call instead of being
+    clamped. Supported Podman (API 1.40 at v3.4/v4.0 and up) and current Docker
+    are unaffected.
 - v0.4.0: provisioning. The `Provisioner` optional capability
   (`PullImage`, `CreateNetwork`, `RemoveNetwork`, `CreateVolume`,
   `RemoveVolume`, `CreateContainer`, `RemoveContainer`) with its `NetworkSpec`,
