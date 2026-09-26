@@ -6,14 +6,11 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"io"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 // Provisioner is an optional capability a Runtime implementation may satisfy
@@ -150,21 +147,26 @@ func (e *engineClient) PullImage(ctx context.Context, ref string) error {
 	// An inspect that succeeds means the image is already local, so the pull
 	// (which reaches out to a registry) is skipped. Only a genuine not-found
 	// falls through to the pull; any other inspect error is real and returned.
+	// The moby client removed client.IsErrNotFound, so a not-found is now
+	// classified with cerrdefs.IsNotFound from github.com/containerd/errdefs.
 	if _, inspectErr := cli.ImageInspect(ctx, ref); inspectErr == nil {
 		return nil
-	} else if !client.IsErrNotFound(inspectErr) {
+	} else if !cerrdefs.IsNotFound(inspectErr) {
 		return fmt.Errorf("runtime/%s: inspect image %s: %w", e.engine, ref, inspectErr)
 	}
 
-	rc, err := cli.ImagePull(ctx, ref, image.PullOptions{})
+	rc, err := cli.ImagePull(ctx, ref, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("runtime/%s: pull image %s: %w", e.engine, ref, err)
 	}
 	defer rc.Close()
 
-	// The pull only completes once its progress stream is drained to EOF, so
-	// the body is read to completion and discarded rather than parsed.
-	if _, err := io.Copy(io.Discard, rc); err != nil {
+	// The pull only completes once its progress stream is consumed. The moby
+	// client's ImagePullResponse.Wait drains that stream AND surfaces an
+	// in-stream pull error (a 200 followed by an {"error": ...} message), which
+	// the old io.Copy(io.Discard, rc) silently discarded, so a failed pull used
+	// to return nil. Wait is what makes a genuine pull failure an error here.
+	if err := rc.Wait(ctx); err != nil {
 		return fmt.Errorf("runtime/%s: pull image %s: %w", e.engine, ref, err)
 	}
 	return nil
@@ -177,7 +179,7 @@ func (e *engineClient) CreateNetwork(ctx context.Context, spec NetworkSpec) (str
 		return "", err
 	}
 
-	resp, err := cli.NetworkCreate(ctx, spec.Name, network.CreateOptions{
+	resp, err := cli.NetworkCreate(ctx, spec.Name, client.NetworkCreateOptions{
 		Driver:   "bridge",
 		Internal: true,
 		Labels:   spec.Labels,
@@ -195,7 +197,7 @@ func (e *engineClient) RemoveNetwork(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := cli.NetworkRemove(ctx, id); err != nil {
+	if _, err := cli.NetworkRemove(ctx, id, client.NetworkRemoveOptions{}); err != nil {
 		return fmt.Errorf("runtime/%s: remove network %s: %w", e.engine, id, err)
 	}
 	return nil
@@ -208,14 +210,14 @@ func (e *engineClient) CreateVolume(ctx context.Context, spec VolumeSpec) (strin
 		return "", err
 	}
 
-	vol, err := cli.VolumeCreate(ctx, volume.CreateOptions{
+	vol, err := cli.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name:   spec.Name,
 		Labels: spec.Labels,
 	})
 	if err != nil {
 		return "", fmt.Errorf("runtime/%s: create volume %s: %w", e.engine, spec.Name, err)
 	}
-	return vol.Name, nil
+	return vol.Volume.Name, nil
 }
 
 // RemoveVolume removes a named volume. It does not force: a volume still held
@@ -226,7 +228,7 @@ func (e *engineClient) RemoveVolume(ctx context.Context, name string) error {
 		return err
 	}
 
-	if err := cli.VolumeRemove(ctx, name, false); err != nil {
+	if _, err := cli.VolumeRemove(ctx, name, client.VolumeRemoveOptions{Force: false}); err != nil {
 		return fmt.Errorf("runtime/%s: remove volume %s: %w", e.engine, name, err)
 	}
 	return nil
@@ -268,13 +270,20 @@ func (e *engineClient) CreateContainer(ctx context.Context, spec ContainerSpec) 
 
 	// No PortBindings are ever set, so the container publishes nothing to the
 	// host: a throwaway restore is never reachable from outside its network.
-	created, err := cli.ContainerCreate(ctx, cfg, hostCfg, nil, nil, spec.Name)
+	// The moby client folds the config, host config, networking config,
+	// platform, and name into one ContainerCreateOptions struct; core sets only
+	// Config, HostConfig, and Name (no networking config or platform override).
+	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     cfg,
+		HostConfig: hostCfg,
+		Name:       spec.Name,
+	})
 	if err != nil {
 		return "", fmt.Errorf("runtime/%s: create container %s: %w", e.engine, spec.Name, err)
 	}
 
 	if spec.Start {
-		if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 			// The id is returned alongside the error so the caller can still
 			// tear the created-but-unstarted container down.
 			return created.ID, fmt.Errorf("runtime/%s: start container %s: %w", e.engine, created.ID, err)
@@ -291,7 +300,7 @@ func (e *engineClient) RemoveContainer(ctx context.Context, id string, force boo
 		return err
 	}
 
-	if err := cli.ContainerRemove(ctx, id, container.RemoveOptions{
+	if _, err := cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{
 		Force:         force,
 		RemoveVolumes: true,
 	}); err != nil {

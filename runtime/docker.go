@@ -30,7 +30,7 @@ type DockerRuntime struct {
 // empty socket resolves to the conventional /var/run/docker.sock, matching
 // what a consumer means by "empty uses the runtime default" and mirroring
 // NewPodman's own empty-socket handling. A non-empty socket is used verbatim,
-// exactly as before, so this never builds a bare "unix://" the Docker SDK
+// exactly as before, so this never builds a bare "unix://" the moby client
 // cannot parse.
 func NewDocker(socket string) *DockerRuntime {
 	if socket == "" {

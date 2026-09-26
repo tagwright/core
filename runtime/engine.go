@@ -14,14 +14,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // composeIdentityFunc resolves a container's compose project and service
@@ -88,11 +86,12 @@ func (e *engineClient) List(ctx context.Context) ([]Container, error) {
 		return nil, err
 	}
 
-	summaries, err := cli.ContainerList(ctx, container.ListOptions{All: true})
+	listed, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/%s: list containers: %w", e.engine, err)
 	}
 
+	summaries := listed.Items
 	out := make([]Container, 0, len(summaries))
 	for _, s := range summaries {
 		name := ""
@@ -114,7 +113,7 @@ func (e *engineClient) List(ctx context.Context) ([]Container, error) {
 		out = append(out, Container{
 			ID:       s.ID,
 			Name:     name,
-			State:    s.State,
+			State:    string(s.State),
 			Labels:   s.Labels,
 			Mounts:   mounts,
 			Project:  project,
@@ -133,10 +132,11 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 		return Container{}, err
 	}
 
-	info, err := cli.ContainerInspect(ctx, id)
+	inspected, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
 		return Container{}, fmt.Errorf("runtime/%s: inspect container %s: %w", e.engine, id, err)
 	}
+	info := inspected.Container
 
 	var labels map[string]string
 	image := ""
@@ -152,13 +152,16 @@ func (e *engineClient) Inspect(ctx context.Context, id string) (Container, error
 	exitCode := 0
 	oomKilled := false
 	if info.State != nil {
-		state = info.State.Status
+		// State.Status and Health.Status are the strongly-typed ContainerState
+		// and HealthStatus enums in the moby api types, so each is converted
+		// back to the plain string core's Container promises.
+		state = string(info.State.Status)
 		exitCode = info.State.ExitCode
 		oomKilled = info.State.OOMKilled
 		// State.Health is nil when the container has no HEALTHCHECK, so the
 		// pointer must be guarded before reading its status.
 		if info.State.Health != nil {
-			health = info.State.Health.Status
+			health = string(info.State.Health.Status)
 		}
 	}
 
@@ -230,22 +233,29 @@ func restartPolicyName(hc *container.HostConfig) string {
 // published to the host) yields none. Podman's compat API reports ports in the
 // same shape, so this mapping is engine-agnostic.
 //
-// The container port comes from the key ("80/tcp" -> 80, "tcp"); the host port
-// comes from the binding string ("8080" -> 8080). A host-port string that does
-// not parse is carried as 0 rather than failing the whole mapping, which does
-// not happen for a well-formed engine response. The result is sorted for a
+// The container port comes from the key (network.Port -> 80, "tcp"); the host
+// port comes from the binding string ("8080" -> 8080). A host-port string that
+// does not parse is carried as 0 rather than failing the whole mapping, which
+// does not happen for a well-formed engine response. The result is sorted for a
 // deterministic order (by container port, then protocol, host IP, host port),
 // since the engine's map iteration is not, and a churning order would break a
 // consumer's regenerate-and-compare invariant.
-func mapContainerPorts(ports nat.PortMap) []Port {
+//
+// The moby api types make the binding's HostIP a netip.Addr, so an unbound
+// binding carries the zero Addr. That is stringified only when valid: a zero
+// (unbound) host address maps to "", not the literal "invalid IP" that
+// netip.Addr{}.String() returns. runtime.go promises "" here, and a consumer
+// classifying off-host reachability keys on HostIP, so a mis-mapped unbound
+// binding would otherwise read as reachable.
+func mapContainerPorts(ports network.PortMap) []Port {
 	if len(ports) == 0 {
 		return nil
 	}
 
 	out := make([]Port, 0, len(ports))
 	for key, bindings := range ports {
-		containerPort := key.Int()
-		proto := key.Proto()
+		containerPort := int(key.Num())
+		proto := string(key.Proto())
 		for _, b := range bindings {
 			hostPort := 0
 			if b.HostPort != "" {
@@ -253,11 +263,15 @@ func mapContainerPorts(ports nat.PortMap) []Port {
 					hostPort = n
 				}
 			}
+			hostIP := ""
+			if b.HostIP.IsValid() {
+				hostIP = b.HostIP.String()
+			}
 			out = append(out, Port{
 				ContainerPort: containerPort,
 				HostPort:      hostPort,
 				Protocol:      proto,
-				HostIP:        b.HostIP,
+				HostIP:        hostIP,
 			})
 		}
 	}
@@ -280,11 +294,12 @@ func mapContainerPorts(ports nat.PortMap) []Port {
 // mapContainerNetworks translates the Docker Engine API's per-network
 // endpoint settings (keyed by network name, shared verbatim between the
 // list summary's NetworkSettingsSummary and inspect's NetworkSettings) into
-// core's normalized ContainerNetwork slice. IP address strings that fail
-// to parse (most commonly an empty string, when a container holds no
-// address on one address family) are skipped rather than failing the whole
-// mapping. The result is sorted by network name for a deterministic order,
-// since map iteration is not.
+// core's normalized ContainerNetwork slice. In the moby api types the endpoint
+// IP fields are already netip.Addr, so a family a container holds no address on
+// (most commonly IPv6) decodes to the zero Addr; those are skipped via
+// IsValid() rather than parsed, so an unset address contributes nothing rather
+// than failing the whole mapping. The result is sorted by network name for a
+// deterministic order, since map iteration is not.
 func mapContainerNetworks(nets map[string]*network.EndpointSettings) []ContainerNetwork {
 	if len(nets) == 0 {
 		return nil
@@ -297,11 +312,11 @@ func mapContainerNetworks(nets map[string]*network.EndpointSettings) []Container
 		}
 
 		cn := ContainerNetwork{Name: name, ID: ep.NetworkID}
-		if addr, err := netip.ParseAddr(ep.IPAddress); err == nil {
-			cn.IPs = append(cn.IPs, addr)
+		if ep.IPAddress.IsValid() {
+			cn.IPs = append(cn.IPs, ep.IPAddress)
 		}
-		if addr, err := netip.ParseAddr(ep.GlobalIPv6Address); err == nil {
-			cn.IPs = append(cn.IPs, addr)
+		if ep.GlobalIPv6Address.IsValid() {
+			cn.IPs = append(cn.IPs, ep.GlobalIPv6Address)
 		}
 		out = append(out, cn)
 	}
@@ -319,11 +334,12 @@ func (e *engineClient) ListNetworks(ctx context.Context) ([]Network, error) {
 		return nil, err
 	}
 
-	summaries, err := cli.NetworkList(ctx, network.ListOptions{})
+	listed, err := cli.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/%s: list networks: %w", e.engine, err)
 	}
 
+	summaries := listed.Items
 	out := make([]Network, 0, len(summaries))
 	for _, n := range summaries {
 		out = append(out, mapNetworkSummary(n))
@@ -334,25 +350,22 @@ func (e *engineClient) ListNetworks(ctx context.Context) ([]Network, error) {
 }
 
 // mapNetworkSummary translates a Docker Engine API network summary into
-// core's normalized Network type. network.Summary is a type alias for
-// network.Inspect as of the docker/docker v28.5.2 SDK this package depends
-// on, so NetworkList already returns IPAM, Driver, Internal, and Labels in
-// full: no follow-up NetworkInspect call per network is needed to populate
-// them. Subnet strings that fail to parse as a netip.Prefix are skipped
-// defensively rather than failing the whole inventory, since a malformed or
-// unexpected IPAM config on one network should not hide every other
-// network's subnets from a caller doing egress classification.
+// core's normalized Network type. network.Summary embeds network.Network in
+// the moby api types, so NetworkList already returns IPAM, Driver, Internal,
+// and Labels in full: no follow-up NetworkInspect call per network is needed
+// to populate them. The IPAM subnet is already a netip.Prefix, so an empty or
+// absent subnet decodes to the zero Prefix and is skipped via IsValid(). A
+// malformed subnet, by contrast, now fails JSON decoding of the whole
+// NetworkList response inside the client before this mapping runs, so the old
+// per-entry skip of an unparseable subnet is no longer reachable here (see the
+// finding 1b note in runtime.go).
 func mapNetworkSummary(n network.Summary) Network {
 	subnets := make([]netip.Prefix, 0, len(n.IPAM.Config))
 	for _, c := range n.IPAM.Config {
-		if c.Subnet == "" {
+		if !c.Subnet.IsValid() {
 			continue
 		}
-		prefix, err := netip.ParsePrefix(c.Subnet)
-		if err != nil {
-			continue
-		}
-		subnets = append(subnets, prefix)
+		subnets = append(subnets, c.Subnet)
 	}
 
 	return Network{
@@ -443,9 +456,14 @@ func (e *engineClient) Watch(ctx context.Context) (<-chan Event, <-chan error) {
 		return out, errs
 	}
 
-	msgs, errCh := cli.Events(ctx, events.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("type", string(events.ContainerEventType))),
+	// The moby client reshapes Events to return a single EventsResult carrying
+	// the message and error channels, and replaces the old filters.Args builder
+	// with client.Filters. events.ContainerEventType is a typed enum, so it is
+	// converted to a plain string for the filter value.
+	stream := cli.Events(ctx, client.EventsListOptions{
+		Filters: make(client.Filters).Add("type", string(events.ContainerEventType)),
 	})
+	msgs, errCh := stream.Messages, stream.Err
 
 	go func() {
 		defer close(out)
@@ -503,7 +521,7 @@ func (e *engineClient) Exec(ctx context.Context, id string, spec ExecSpec) (*Exe
 		return nil, err
 	}
 
-	created, err := cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+	created, err := cli.ExecCreate(ctx, id, client.ExecCreateOptions{
 		Cmd:          spec.Cmd,
 		User:         spec.User,
 		AttachStdin:  spec.Stdin != nil,
@@ -514,7 +532,7 @@ func (e *engineClient) Exec(ctx context.Context, id string, spec ExecSpec) (*Exe
 		return nil, fmt.Errorf("runtime/%s: exec create on %s: %w", e.engine, id, err)
 	}
 
-	attach, err := cli.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{})
+	attach, err := cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("runtime/%s: exec attach on %s: %w", e.engine, id, err)
 	}
@@ -550,7 +568,7 @@ func (e *engineClient) Exec(ctx context.Context, id string, spec ExecSpec) (*Exe
 	wait := func() (int, error) {
 		<-done
 
-		inspect, err := cli.ContainerExecInspect(ctx, created.ID)
+		inspect, err := cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
 		if err != nil {
 			return 0, fmt.Errorf("runtime/%s: exec inspect on %s: %w", e.engine, id, err)
 		}
@@ -573,7 +591,7 @@ func (e *engineClient) Stop(ctx context.Context, id string, timeoutSeconds int) 
 	}
 
 	timeout := timeoutSeconds
-	if err := cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout}); err != nil {
+	if _, err := cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		return fmt.Errorf("runtime/%s: stop %s: %w", e.engine, id, err)
 	}
 	return nil
@@ -586,7 +604,7 @@ func (e *engineClient) Start(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := cli.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("runtime/%s: start %s: %w", e.engine, id, err)
 	}
 	return nil
@@ -600,7 +618,7 @@ func (e *engineClient) Kill(ctx context.Context, id string, signal string) error
 		return err
 	}
 
-	if err := cli.ContainerKill(ctx, id, signal); err != nil {
+	if _, err := cli.ContainerKill(ctx, id, client.ContainerKillOptions{Signal: signal}); err != nil {
 		return fmt.Errorf("runtime/%s: kill %s: %w", e.engine, id, err)
 	}
 	return nil
@@ -613,7 +631,7 @@ func (e *engineClient) Restart(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := cli.ContainerRestart(ctx, id, container.StopOptions{}); err != nil {
+	if _, err := cli.ContainerRestart(ctx, id, client.ContainerRestartOptions{}); err != nil {
 		return fmt.Errorf("runtime/%s: restart %s: %w", e.engine, id, err)
 	}
 	return nil

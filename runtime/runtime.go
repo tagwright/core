@@ -82,8 +82,17 @@ type Network struct {
 	ID       string
 	Driver   string
 	Internal bool
-	Subnets  []netip.Prefix
-	Labels   map[string]string
+
+	// Subnets are the network's IPAM subnet CIDRs. In the moby api types the
+	// IPAM subnet is a netip.Prefix, so an empty or absent subnet decodes to the
+	// zero Prefix and is skipped, while a malformed subnet now fails JSON
+	// decoding of the whole NetworkList response inside the client, before core's
+	// mapping runs (finding 1b): a single malformed subnet from the daemon fails
+	// the whole ListNetworks call rather than dropping one entry. A well-formed
+	// daemon response never triggers this.
+	Subnets []netip.Prefix
+
+	Labels map[string]string
 }
 
 // ContainerNetwork is one network a container is attached to, along with
@@ -106,9 +115,13 @@ type ContainerNetwork struct {
 // HostIP: an empty or 0.0.0.0 HostIP means "every interface", a loopback
 // HostIP (127.0.0.1 or ::1) means host-only.
 type Port struct {
-	// ContainerPort is the container-side port number, e.g. 80. It is 0 when
-	// the inspect key does not parse as a number, which does not happen for a
-	// well-formed engine response.
+	// ContainerPort is the container-side port number, e.g. 80, read from the
+	// inspect key. In the moby api types that key is a strongly-typed
+	// network.Port, so a malformed key no longer yields 0 here: it fails JSON
+	// decoding of the whole ContainerInspect response inside the client, before
+	// core's mapping runs (the finding 1b whole-response-fail behavior, shared
+	// with Network.Subnets). A well-formed engine response is therefore the only
+	// case this mapping sees.
 	ContainerPort int
 
 	// HostPort is the host-side published port number the binding maps to. It
@@ -122,8 +135,11 @@ type Port struct {
 	Protocol string
 
 	// HostIP is the host interface the port is bound on, as inspect provides
-	// it: an explicit address, "0.0.0.0"/"::" for all interfaces, or "" when
-	// the engine reports none.
+	// it: an explicit address, "0.0.0.0"/"::" for all interfaces, or "" when the
+	// binding is unbound. In the moby api types the binding's host address is a
+	// netip.Addr, so an unbound binding carries the zero Addr, which core maps to
+	// "" (not the literal "invalid IP" that netip.Addr{}.String() returns; this
+	// is the finding 1a contract a reachability consumer relies on).
 	HostIP string
 }
 
