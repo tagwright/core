@@ -41,6 +41,36 @@ None of this is a residual to apologize for. A runtime-abstraction library that
 talks to a socket has exactly this surface, and the honest posture is to name
 the socket grant as the boundary and stop there.
 
+## Known advisories against the Docker SDK dependency
+
+core currently depends on `github.com/docker/docker` (the moby module) for its
+Engine API client. Two advisories are reported against that module:
+
+- GO-2026-4887 / CVE-2026-34040: a Moby AuthZ plugin bypass on oversized request
+  bodies.
+- GO-2026-4883 / CVE-2026-33997: an off-by-one error in Moby plugin-privilege
+  validation.
+
+Neither is reachable in core, and the reason is structural. Both flaws live in
+the Docker daemon: one in the daemon's authorization-plugin path, the other in
+the daemon's plugin-install privilege validation. core is a pure API client. It
+runs no daemon, installs no plugins, and configures no authorization plugins, so
+it never executes either vulnerable code path. A source-level reachability scan
+(`govulncheck ./...`) confirms that core reaches these advisories only at the
+module-presence level, through ordinary client calls and package init, not
+through the vulnerable symbols. The advisory records carry no symbol data, which
+is why a dependency scanner cannot narrow them automatically and flags any import
+of the module regardless of which functions the caller uses.
+
+These advisories also read "Fixed in: N/A" because the `github.com/docker/docker`
+module is frozen. The fix landed in Docker's split-out client modules
+(`github.com/moby/moby/client` and `github.com/moby/moby/api`). A planned release
+migrates core onto those modules, which removes the dependency and the finding
+outright. This section documents the waiver for the window until that migration
+lands: the advisories are present in the dependency graph but unreachable in a
+pure client, so they are accepted here with this justification rather than
+suppressed silently.
+
 ## Reporting a vulnerability
 
 Report a suspected vulnerability through GitHub's private vulnerability
