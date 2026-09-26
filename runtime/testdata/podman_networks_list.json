@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "homelab_default",
+    "Id": "6d1a0f3b8c2e4d5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f809102030",
+    "Created": "2026-09-26T00:00:00.000000000Z",
+    "Scope": "local",
+    "Driver": "bridge",
+    "EnableIPv6": true,
+    "Internal": false,
+    "IPAM": {
+      "Driver": "default",
+      "Config": [
+        {"Subnet": "10.89.0.0/24", "Gateway": "10.89.0.1"},
+        {"Subnet": "fd00:89::/64", "Gateway": "fd00:89::1"}
+      ]
+    },
+    "Labels": {
+      "com.docker.compose.project": "homelab"
+    }
+  },
+  {
+    "Name": "homelab_isolated",
+    "Id": "7e2b1f4c9d3f5e6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f80910203040",
+    "Created": "2026-09-26T00:00:00.000000000Z",
+    "Scope": "local",
+    "Driver": "bridge",
+    "EnableIPv6": false,
+    "Internal": true,
+    "IPAM": {
+      "Driver": "default",
+      "Config": [
+        {"Subnet": "10.89.1.0/24", "Gateway": "10.89.1.1"}
+      ]
+    },
+    "Labels": {}
+  }
+]

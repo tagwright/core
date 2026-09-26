@@ -1,0 +1,68 @@
+[
+  {
+    "Id": "b9f5c0a1e2d34c5b6a7089f1e2d3c4b5a6978869f0e1d2c3b4a5968778695041",
+    "Names": ["/homelab-web"],
+    "Image": "docker.io/library/nginx:alpine",
+    "ImageID": "sha256:1f2e3d4c5b6a7089f1e2d3c4b5a6978869f0e1d2c3b4a596877869504132aabb",
+    "Command": "/docker-entrypoint.sh nginx -g 'daemon off;'",
+    "Created": 1758844800,
+    "State": "running",
+    "Status": "Up 2 minutes",
+    "Labels": {
+      "com.docker.compose.project": "homelab",
+      "com.docker.compose.service": "web",
+      "io.podman.compose.project": "homelab",
+      "io.podman.compose.service": "web"
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "homelab_webdata",
+        "Source": "/var/lib/containers/storage/volumes/homelab_webdata/_data",
+        "Destination": "/usr/share/nginx/html",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "homelab_default": {
+          "NetworkID": "6d1a0f3b8c2e4d5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f809102030",
+          "IPAddress": "10.89.0.4",
+          "GlobalIPv6Address": ""
+        }
+      }
+    }
+  },
+  {
+    "Id": "a1c2e3f4d5b60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "Names": ["/homelab-db"],
+    "Image": "docker.io/library/postgres:16-alpine",
+    "ImageID": "sha256:2233445566778899aabbccddeeff00112233445566778899aabbccddeeff0011",
+    "Command": "docker-entrypoint.sh postgres",
+    "Created": 1758844700,
+    "State": "running",
+    "Status": "Up 3 minutes",
+    "Labels": {
+      "com.docker.compose.project": "homelab",
+      "com.docker.compose.service": "db"
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "homelab_pgdata",
+        "Source": "/var/lib/containers/storage/volumes/homelab_pgdata/_data",
+        "Destination": "/var/lib/postgresql/data",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "homelab_default": {
+          "NetworkID": "6d1a0f3b8c2e4d5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f809102030",
+          "IPAddress": "10.89.0.5",
+          "GlobalIPv6Address": "fd00:89::5"
+        }
+      }
+    }
+  }
+]

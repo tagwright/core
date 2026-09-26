@@ -1,0 +1,65 @@
+{
+  "Id": "b9f5c0a1e2d34c5b6a7089f1e2d3c4b5a6978869f0e1d2c3b4a5968778695041",
+  "Created": "2026-09-26T00:00:00.000000000Z",
+  "Name": "/homelab-web",
+  "RestartCount": 1,
+  "Image": "sha256:1f2e3d4c5b6a7089f1e2d3c4b5a6978869f0e1d2c3b4a596877869504132aabb",
+  "State": {
+    "Status": "running",
+    "Running": true,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 4211,
+    "ExitCode": 0,
+    "Health": {
+      "Status": "healthy",
+      "FailingStreak": 0
+    }
+  },
+  "Config": {
+    "Image": "docker.io/library/nginx:alpine",
+    "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "NGINX_VERSION=1.27.0"],
+    "Labels": {
+      "com.docker.compose.project": "homelab",
+      "com.docker.compose.service": "web"
+    }
+  },
+  "HostConfig": {
+    "LogConfig": {
+      "Type": "journald"
+    },
+    "RestartPolicy": {
+      "Name": "always",
+      "MaximumRetryCount": 0
+    },
+    "NetworkMode": "homelab_default"
+  },
+  "Mounts": [
+    {
+      "Type": "volume",
+      "Name": "homelab_webdata",
+      "Source": "/var/lib/containers/storage/volumes/homelab_webdata/_data",
+      "Destination": "/usr/share/nginx/html",
+      "RW": true
+    }
+  ],
+  "NetworkSettings": {
+    "Ports": {
+      "80/tcp": [
+        {"HostIp": "0.0.0.0", "HostPort": "8080"}
+      ],
+      "443/tcp": [
+        {"HostIp": "", "HostPort": "8443"}
+      ]
+    },
+    "Networks": {
+      "homelab_default": {
+        "NetworkID": "6d1a0f3b8c2e4d5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f809102030",
+        "IPAddress": "10.89.0.4",
+        "GlobalIPv6Address": "fd00:89::4"
+      }
+    }
+  }
+}
